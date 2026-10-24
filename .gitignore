@@ -1,0 +1,9 @@
+# 构建产物与本地部署副本
+dist/
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
