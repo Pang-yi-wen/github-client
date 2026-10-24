@@ -376,6 +376,122 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
 .repo-tabs a:hover { color: var(--fg); text-decoration: none; border-bottom-color: var(--border); }
 .repo-tabs a.on { color: var(--fg); border-bottom-color: var(--tab-line); font-weight: 500; }
 
+/* ---------- 筛选栏与分页 ---------- */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.filt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.filt select,
+.filt input {
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  min-width: 84px;
+}
+.filt select { cursor: pointer; padding-right: 4px; }
+.filt input { min-width: 130px; font-family: ui-monospace, monospace; font-size: 12px; }
+.filt select:focus,
+.filt input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.panel .filter-bar {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  margin-bottom: 0;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 6px 0 10px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.pager .disabled { opacity: .45; pointer-events: none; }
+
+.search-summary {
+  font-size: 12px;
+  margin: -4px 0 14px;
+  word-break: break-all;
+}
+.search-summary code {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+/* 代码搜索命中 */
+
+.code-hit {
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--border-muted);
+  cursor: pointer;
+}
+.code-hit:last-child { border-bottom: none; }
+.code-hit:hover { background: var(--bg-hover); }
+.ch-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.ch-top b { font-weight: 500; color: var(--fg); }
+.ch-top .dim { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.ch-frag {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 92px;
+  overflow: hidden;
+  color: var(--fg-muted);
+}
+.ch-frag mark,
+mark {
+  background: color-mix(in srgb, var(--yellow) 32%, transparent);
+  color: var(--fg);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 /* ---------- 面板 ---------- */
 
 .panel {
@@ -3347,39 +3463,104 @@ async function downloadOne(o, r, ref, path, name) {
 
 /* ---------------------------- Issues / PR ---------------------------- */
 
-async function viewIssues(o, r, kind, state) {
+async function viewIssues(o, r, kind, params) {
   loading();
-  state = state === 'closed' ? 'closed' : 'open';
+  params = params || new URLSearchParams();
+
   const isPR = kind === 'pulls';
+  const state = params.get('state') === 'closed' ? 'closed' : 'open';
+  const sort = params.get('sort') || 'updated';
+  const dir = params.get('dir') || 'desc';
+  const label = isPR ? '' : (params.get('label') || '');
+  const page = Math.max(1, Number(params.get('page') || 1));
+  const per = 40;
+
   document.title = (isPR ? 'Pull requests' : 'Issues') + ' · ' + o + '/' + r;
 
-  let repo, list;
+  let repo, list, labels = [];
   try {
     repo = await getRepo(o, r);
-    list = await gh('/repos/' + o + '/' + r + '/' + (isPR ? 'pulls' : 'issues') +
-      '?state=' + state + '&per_page=40&sort=updated&direction=desc');
+    const jobs = [
+      gh('/repos/' + o + '/' + r + '/' + (isPR ? 'pulls' : 'issues') +
+        '?state=' + state + '&per_page=' + per + '&page=' + page +
+        '&sort=' + sort + '&direction=' + dir +
+        (label ? '&labels=' + encodeURIComponent(label) : ''))
+    ];
+    if (!isPR) jobs.push(gh('/repos/' + o + '/' + r + '/labels?per_page=100').catch(() => []));
+    const out = await Promise.all(jobs);
+    list = out[0];
+    labels = out[1] || [];
   } catch (e) {
     app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取列表', e.message);
     return;
   }
 
-  const items = isPR ? list : list.filter(x => !x.pull_request);
-  const qs = '?state=' + state;
+  const items = isPR ? list : list.filter((x) => !x.pull_request);
+  const base = link(o, r, isPR ? 'pulls' : 'issues');
+
+  const mk = (patch) => {
+    const cur = { state: state, sort: sort, dir: dir, label: label, page: page > 1 ? String(page) : '' };
+    Object.keys(patch).forEach((k) => { cur[k] = patch[k]; });
+    const np = new URLSearchParams();
+    Object.keys(cur).forEach((k) => { if (cur[k]) np.set(k, cur[k]); });
+    return base + '?' + np.toString();
+  };
+
+  const hasNext = list.length >= per;
+  const pager = (page > 1 || hasNext) ? '<div class="pager">' +
+    (page > 1
+      ? '<a class="btn sm" href="' + mk({ page: page > 2 ? String(page - 1) : '' }) + '">上一页</a>'
+      : '<span class="btn sm ghost disabled">上一页</span>') +
+    '<span class="dim">第 ' + page + ' 页</span>' +
+    (hasNext
+      ? '<a class="btn sm" href="' + mk({ page: String(page + 1) }) + '">下一页</a>'
+      : '<span class="btn sm ghost disabled">下一页</span>') +
+    '</div>' : '';
+
+  const sortSel = '<label class="filt"><span>排序</span><select id="i-sort">' +
+    [['updated', '最近更新'], ['created', '最新创建'], ['comments', '评论最多']]
+      .map(([v, t]) => '<option value="' + v + '"' + (v === sort ? ' selected' : '') + '>' + t + '</option>')
+      .join('') + '</select></label>' +
+    '<label class="filt"><span>顺序</span><select id="i-dir">' +
+    [['desc', '降序'], ['asc', '升序']]
+      .map(([v, t]) => '<option value="' + v + '"' + (v === dir ? ' selected' : '') + '>' + t + '</option>')
+      .join('') + '</select></label>';
+
+  const labelSel = isPR ? '' :
+    '<label class="filt"><span>标签</span><select id="i-label"><option value="">全部</option>' +
+    labels.slice(0, 80).map((l) =>
+      '<option value="' + esc(l.name) + '"' + (l.name === label ? ' selected' : '') + '>' +
+      esc(l.name) + '</option>').join('') + '</select></label>';
 
   app.innerHTML = repoHeader(repo, isPR ? 'pulls' : 'issues') + `
     <div class="panel">
       <div class="panel-head">
-        <a class="btn sm ${state === 'open' ? 'primary' : 'ghost'}" href="${link(o, r, isPR ? 'pulls' : 'issues')}?state=open">Open</a>
-        <a class="btn sm ${state === 'closed' ? 'primary' : 'ghost'}" href="${link(o, r, isPR ? 'pulls' : 'issues')}?state=closed">Closed</a>
+        <a class="btn sm ${state === 'open' ? 'primary' : 'ghost'}" href="${mk({ state: 'open', page: '' })}">打开</a>
+        <a class="btn sm ${state === 'closed' ? 'primary' : 'ghost'}" href="${mk({ state: 'closed', page: '' })}">已关闭</a>
         <span class="spacer"></span>
         <span class="dim">${items.length} 条</span>
       </div>
-      ${items.length ? items.map(it => issueRow(it, isPR)).join('') : '<div class="empty">没有记录</div>'}
-    </div>`;
+      <div class="filter-bar">${sortSel}${labelSel}</div>
+      ${items.length ? items.map((it) => issueRow(it, isPR)).join('') : '<div class="empty">没有记录</div>'}
+    </div>
+    ${pager}`;
 
-  app.querySelectorAll('.issue-row[data-href]').forEach(el => {
+  app.querySelectorAll('.issue-row[data-href]').forEach((el) => {
     el.addEventListener('click', () => { location.hash = el.getAttribute('data-href'); });
   });
+
+  const apply = (key, val) => {
+    const patch = {};
+    patch[key] = val;
+    if (key !== 'page') patch.page = '';
+    location.hash = mk(patch);
+  };
+  const s1 = $('#i-sort');
+  if (s1) s1.addEventListener('change', () => apply('sort', s1.value));
+  const s2 = $('#i-dir');
+  if (s2) s2.addEventListener('change', () => apply('dir', s2.value));
+  const s3 = $('#i-label');
+  if (s3) s3.addEventListener('change', () => apply('label', s3.value));
 }
 
 function issueRow(it, isPR) {
@@ -3513,12 +3694,15 @@ async function viewReleases(o, r) {
     </div>`;
 }
 
-async function viewCommits(o, r, ref) {
+async function viewCommits(o, r, ref, page) {
   loading();
+  page = Math.max(1, Number(page || 1));
+  const per = 50;
+
   let repo, commits;
   try {
     repo = await getRepo(o, r);
-    commits = await gh('/repos/' + o + '/' + r + '/commits?per_page=50' +
+    commits = await gh('/repos/' + o + '/' + r + '/commits?per_page=' + per + '&page=' + page +
       (ref ? '&sha=' + encodeURIComponent(ref) : ''));
   } catch (e) {
     app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取提交', e.message);
@@ -3526,9 +3710,23 @@ async function viewCommits(o, r, ref) {
   }
   document.title = '提交 · ' + o + '/' + r;
 
+  const branch = ref || repo.default_branch;
+  const base = link(o, r, 'commits', branch);
+  const mk = (p) => base + (p > 1 ? '?page=' + p : '');
+  const hasNext = commits.length >= per;
+  const pager = (page > 1 || hasNext) ? '<div class="pager">' +
+    (page > 1
+      ? '<a class="btn sm" href="' + mk(page - 1) + '">上一页</a>'
+      : '<span class="btn sm ghost disabled">上一页</span>') +
+    '<span class="dim">第 ' + page + ' 页</span>' +
+    (hasNext
+      ? '<a class="btn sm" href="' + mk(page + 1) + '">下一页</a>'
+      : '<span class="btn sm ghost disabled">下一页</span>') +
+    '</div>' : '';
+
   app.innerHTML = repoHeader(repo, 'commits') + `
     <div class="panel">
-      <div class="panel-head">${ICON.branch} ${esc(ref || repo.default_branch)} · ${commits.length} 次提交</div>
+      <div class="panel-head">${ICON.branch} ${esc(branch)} · 本页 ${commits.length} 次提交</div>
       ${commits.map(c => `<div class="commit-row" data-href="${link(o, r, 'commit', c.sha)}">
         ${avatar(c.author ? c.author.avatar_url : '', 26)}
         <div class="cm-main">
@@ -3537,7 +3735,7 @@ async function viewCommits(o, r, ref) {
         </div>
         <span class="mono dim">${esc(c.sha.slice(0, 7))}</span>
       </div>`).join('')}
-    </div>`;
+    </div>${pager}`;
 
   app.querySelectorAll('.commit-row').forEach(el => {
     el.addEventListener('click', () => { location.hash = el.getAttribute('data-href'); });
@@ -3638,59 +3836,290 @@ async function viewUser(login) {
 
 /* ---------------------------- 搜索 ---------------------------- */
 
-async function viewSearch(q, type) {
+/* ---------------------------- 搜索 ---------------------------- */
+
+const SEARCH_LANGS = [
+  ['', '任意语言'], ['javascript', 'JavaScript'], ['typescript', 'TypeScript'],
+  ['python', 'Python'], ['java', 'Java'], ['go', 'Go'], ['rust', 'Rust'],
+  ['c', 'C'], ['cpp', 'C++'], ['csharp', 'C#'], ['php', 'PHP'], ['ruby', 'Ruby'],
+  ['swift', 'Swift'], ['kotlin', 'Kotlin'], ['dart', 'Dart'], ['shell', 'Shell'],
+  ['html', 'HTML'], ['css', 'CSS'], ['vue', 'Vue'], ['lua', 'Lua'], ['r', 'R']
+];
+
+/** 相对时间 → 具体日期，用于 pushed:>= 限定 */
+function pushedDate(v) {
+  if (!v) return '';
+  const d = new Date();
+  if (v === 'week') d.setDate(d.getDate() - 7);
+  else if (v === 'month') d.setMonth(d.getMonth() - 1);
+  else if (v === 'year') d.setFullYear(d.getFullYear() - 1);
+  else return '';
+  return d.toISOString().slice(0, 10);
+}
+
+/** 把界面上的筛选条件拼成 GitHub 的检索语法 */
+function composeSearchQuery(base, type, f) {
+  const src = String(base || '').trim();
+  const has = (k) => new RegExp('(^|\\s)' + k + ':', 'i').test(src);
+  const out = [src];
+  const add = (k, v) => {
+    if (v && !has(k)) out.push(k + ':' + v);
+  };
+
+  if (type === 'repositories' || type === 'code') add('language', f.lang);
+
+  if (type === 'repositories') {
+    if (f.stars) add('stars', '>=' + f.stars);
+    const d = pushedDate(f.pushed);
+    if (d) add('pushed', '>=' + d);
+  }
+
+  if (type === 'code') {
+    if (f.repo.trim()) add('repo', f.repo.trim());
+    if (f.path.trim()) add('path', f.path.trim());
+  }
+
+  if (type === 'users') {
+    add('type', f.utype);
+    if (f.repos) add('repos', '>=' + f.repos);
+  }
+
+  if (type === 'issues') {
+    add('state', f.state);
+    if (f.kind === 'issue') add('is', 'issue');
+    if (f.kind === 'pr') add('is', 'pr');
+    if (f.label.trim()) out.push('label:"' + f.label.trim().replace(/"/g, '') + '"');
+  }
+
+  return out.filter(Boolean).join(' ');
+}
+
+function searchFilterBar(type, f) {
+  const opt = (v, t, cur) =>
+    '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(t) + '</option>';
+  const box = (id, label, control) =>
+    '<label class="filt"><span>' + label + '</span>' + control + '</label>';
+  const select = (id, pairs, cur) =>
+    '<select id="' + id + '">' + pairs.map(([v, t]) => opt(v, t, cur)).join('') + '</select>';
+  const input = (id, ph, cur) =>
+    '<input id="' + id + '" type="text" placeholder="' + esc(ph) + '" value="' + esc(cur) + '">';
+
+  const parts = [];
+
+  if (type === 'repositories') {
+    parts.push(box('sort', '排序', select('f-sort', [
+      ['', '最佳匹配'], ['stars', 'Star 最多'], ['forks', 'Fork 最多'],
+      ['updated', '最近更新'], ['help-wanted-issues', '待协助最多']
+    ], f.sort)));
+    parts.push(box('lang', '语言', select('f-lang', SEARCH_LANGS, f.lang)));
+    parts.push(box('stars', 'Star', select('f-stars', [
+      ['', '不限'], ['50', '≥ 50'], ['500', '≥ 500'], ['5000', '≥ 5000'], ['20000', '≥ 2 万']
+    ], f.stars)));
+    parts.push(box('pushed', '更新', select('f-pushed', [
+      ['', '不限'], ['week', '一周内'], ['month', '一月内'], ['year', '一年内']
+    ], f.pushed)));
+  } else if (type === 'code') {
+    parts.push(box('lang', '语言', select('f-lang', SEARCH_LANGS, f.lang)));
+    parts.push(box('repo', '限定仓库', input('f-repo', 'owner/repo', f.repo)));
+    parts.push(box('path', '路径', input('f-path', 'src/components', f.path)));
+  } else if (type === 'users') {
+    parts.push(box('sort', '排序', select('f-sort', [
+      ['', '最佳匹配'], ['followers', '关注者最多'], ['repositories', '仓库最多'], ['joined', '最近加入']
+    ], f.sort)));
+    parts.push(box('utype', '类型', select('f-utype', [
+      ['', '不限'], ['user', '用户'], ['org', '组织']
+    ], f.utype)));
+    parts.push(box('repos', '仓库数', select('f-repos', [
+      ['', '不限'], ['10', '≥ 10'], ['50', '≥ 50'], ['200', '≥ 200']
+    ], f.repos)));
+  } else if (type === 'issues') {
+    parts.push(box('sort', '排序', select('f-sort', [
+      ['', '最佳匹配'], ['comments', '评论最多'], ['created', '最新创建'], ['updated', '最近更新']
+    ], f.sort)));
+    parts.push(box('state', '状态', select('f-state', [
+      ['', '不限'], ['open', '打开'], ['closed', '已关闭']
+    ], f.state)));
+    parts.push(box('kind', '类型', select('f-kind', [
+      ['', '议题和 PR'], ['issue', '仅议题'], ['pr', '仅 PR']
+    ], f.kind)));
+    parts.push(box('label', '标签', input('f-label', 'bug', f.label)));
+  }
+
+  return '<div class="filter-bar">' + parts.join('') + '</div>';
+}
+
+/** 筛选控件改动后写回 URL，交给路由重绘 */
+function bindSearchFilters() {
+  const map = {
+    'f-sort': 'sort', 'f-lang': 'lang', 'f-stars': 'stars', 'f-pushed': 'pushed',
+    'f-repo': 'repo', 'f-path': 'path', 'f-utype': 'utype', 'f-repos': 'repos',
+    'f-state': 'state', 'f-kind': 'kind', 'f-label': 'label'
+  };
+  Object.keys(map).forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const apply = () => {
+      const raw = location.hash.replace(/^#/, '');
+      const idx = raw.indexOf('?');
+      const params = new URLSearchParams(idx >= 0 ? raw.slice(idx + 1) : '');
+      const v = String(el.value || '').trim();
+      if (v) params.set(map[id], v);
+      else params.delete(map[id]);
+      params.delete('page');
+      location.hash = '#/search?' + params.toString();
+    };
+    el.addEventListener('change', apply);
+    if (el.tagName === 'INPUT') {
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); apply(); }
+      });
+    }
+  });
+}
+
+/** 从检索式里取出裸关键词，用于命中高亮 */
+function searchTerms(q) {
+  return String(q || '').split(/\s+/)
+    .filter((t) => t && t.indexOf(':') < 0 && t.length >= 2)
+    .slice(0, 5);
+}
+
+function highlightTerms(text, terms) {
+  let s = esc(text);
+  (terms || []).forEach((t) => {
+    const safe = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      s = s.replace(new RegExp('(' + safe + ')', 'gi'), '<mark>$1</mark>');
+    } catch (_) {}
+  });
+  return s;
+}
+
+/** 搜索结果分页。GitHub 检索最多能翻到第 1000 条 */
+function searchPager(params, page, total) {
+  const per = 30;
+  const maxPage = Math.min(34, Math.max(1, Math.ceil(Math.min(total, 1000) / per)));
+  if (maxPage <= 1) return '';
+
+  const mk = (p) => {
+    const np = new URLSearchParams(params.toString());
+    np.set('page', String(p));
+    return '#/search?' + np.toString();
+  };
+  const prev = page > 1
+    ? '<a class="btn sm" href="' + mk(page - 1) + '">上一页</a>'
+    : '<span class="btn sm ghost disabled">上一页</span>';
+  const next = page < maxPage
+    ? '<a class="btn sm" href="' + mk(page + 1) + '">下一页</a>'
+    : '<span class="btn sm ghost disabled">下一页</span>';
+
+  return '<div class="pager">' + prev +
+    '<span class="dim">第 ' + page + ' / ' + maxPage + ' 页</span>' + next + '</div>';
+}
+
+async function viewSearch(q, type, params) {
   type = type || 'repositories';
   if (!q) { location.hash = '#/'; return; }
+  params = params || new URLSearchParams();
+
+  const f = {
+    sort: params.get('sort') || '',
+    order: params.get('order') || 'desc',
+    lang: params.get('lang') || '',
+    stars: params.get('stars') || '',
+    pushed: params.get('pushed') || '',
+    repo: params.get('repo') || '',
+    path: params.get('path') || '',
+    label: params.get('label') || '',
+    utype: params.get('utype') || '',
+    repos: params.get('repos') || '',
+    state: params.get('state') || '',
+    kind: params.get('kind') || ''
+  };
+  const page = Math.max(1, Number(params.get('page') || 1));
+
   document.title = q + ' · 搜索';
   loading();
 
-  const tabs = [['repositories', '仓库'], ['code', '代码'], ['users', '用户'], ['issues', '议题']];
+  const query = composeSearchQuery(q, type, f);
+  const per = 30;
+  const qs = '?q=' + encodeURIComponent(query) + '&per_page=' + per + '&page=' + page;
+  const sortQs = f.sort ? '&sort=' + encodeURIComponent(f.sort) + '&order=' + f.order : '';
+
   let body = '';
+  let total = 0;
 
   try {
     if (type === 'code') {
       if (!TOKEN) throw new Error('代码搜索需要授权令牌');
-      const res = await gh('/search/code?q=' + encodeURIComponent(q) + '&per_page=40',
+      const res = await gh('/search/code' + qs + sortQs,
         { accept: 'application/vnd.github.text-match+json' });
-      body = '<div class="panel"><div class="panel-head">' + res.total_count + ' 个结果</div>' +
-        (res.items.map(it => {
-          const [o, r] = it.repository.full_name.split('/');
-          return `<div class="file-row" data-href="${link(o, r, 'blob', 'HEAD', it.path)}">
-            ${ICON.file}<span class="fname-wrap"><span class="fname">${esc(it.name)}</span></span>
-            <span class="fmsg">${esc(it.repository.full_name)} · ${esc(it.path)}</span></div>`;
+      total = res.total_count;
+      const terms = searchTerms(q);
+      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个文件</div>' +
+        (res.items.map((it) => {
+          const parts = it.repository.full_name.split('/');
+          const frag = (it.text_matches || [])[0];
+          return '<div class="code-hit" data-href="' +
+            link(parts[0], parts[1], 'blob', 'HEAD', it.path) + '">' +
+            '<div class="ch-top">' + ICON.file + '<b>' + esc(it.name) + '</b>' +
+            '<span class="dim">' + esc(it.repository.full_name) + ' · ' + esc(it.path) + '</span></div>' +
+            (frag ? '<pre class="ch-frag">' +
+              highlightTerms(String(frag.fragment || '').slice(0, 400), terms) + '</pre>' : '') +
+            '</div>';
         }).join('') || '<div class="empty">没有结果</div>') + '</div>';
     } else if (type === 'users') {
-      const res = await gh('/search/users?q=' + encodeURIComponent(q) + '&per_page=40');
-      body = '<div class="panel"><div class="panel-head">' + res.total_count + ' 个用户</div>' +
-        (res.items.map(u => `<div class="file-row" data-href="#/u/${encodeURIComponent(u.login)}">
-          ${avatar(u.avatar_url, 26)}
-          <span class="fname-wrap"><span class="fname">${esc(u.login)}</span></span>
-          <span class="fmsg">${esc(u.type || '')}</span></div>`).join('') ||
+      const res = await gh('/search/users' + qs + sortQs);
+      total = res.total_count;
+      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个用户</div>' +
+        (res.items.map((u) => '<div class="file-row" data-href="#/u/' + encodeURIComponent(u.login) + '">' +
+          avatar(u.avatar_url, 26) +
+          '<span class="fname-wrap"><span class="fname">' + esc(u.login) + '</span></span>' +
+          '<span class="fmsg">' + esc(u.type || '') + '</span></div>').join('') ||
           '<div class="empty">没有结果</div>') + '</div>';
     } else if (type === 'issues') {
-      const res = await gh('/search/issues?q=' + encodeURIComponent(q) + '&per_page=40');
-      body = '<div class="panel"><div class="panel-head">' + res.total_count + ' 个议题</div>' +
-        (res.items.map(it => {
+      const res = await gh('/search/issues' + qs + sortQs);
+      total = res.total_count;
+      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个议题</div>' +
+        (res.items.map((it) => {
           const fo = it.repository_url.split('/').slice(-2);
-          return `<div class="file-row" data-href="${link(fo[0], fo[1], it.pull_request ? 'pull' : 'issue', it.number)}">
-            ${it.pull_request ? ICON.pr : ICON.issue}
-            <span class="fname-wrap"><span class="fname">${esc(it.title)}</span></span>
-            <span class="fmsg">${esc(fo[0] + '/' + fo[1])} #${it.number}</span></div>`;
+          return '<div class="file-row" data-href="' +
+            link(fo[0], fo[1], it.pull_request ? 'pull' : 'issue', it.number) + '">' +
+            (it.pull_request ? ICON.pr : ICON.issue) +
+            '<span class="fname-wrap"><span class="fname">' + esc(it.title) + '</span></span>' +
+            '<span class="fmsg">' + esc(fo[0] + '/' + fo[1]) + ' #' + it.number + '</span>' +
+            '<span class="badge ' + (it.state === 'open' ? 'open' : 'closed') + '">' +
+            esc(it.state === 'open' ? '打开' : '已关闭') + '</span></div>';
         }).join('') || '<div class="empty">没有结果</div>') + '</div>';
     } else {
-      const res = await gh('/search/repositories?q=' + encodeURIComponent(q) + '&per_page=40');
-      body = '<div class="panel"><div class="panel-head">' + fmtNum(res.total_count) + ' 个仓库</div>' +
+      const res = await gh('/search/repositories' + qs + sortQs);
+      total = res.total_count;
+      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个仓库</div>' +
         (res.items.map(repoCard).join('') || '<div class="empty">没有结果</div>') + '</div>';
     }
   } catch (e) {
     body = errorBox('搜索失败', e.message);
   }
 
-  app.innerHTML = '<h2 class="page-title">“' + esc(q) + '” 的搜索结果</h2>' +
-    '<div class="repo-tabs">' + tabs.map(([k, label]) =>
-      `<a href="#/search?q=${encodeURIComponent(q)}&type=${k}" class="${type === k ? 'on' : ''}">${label}</a>`
-    ).join('') + '</div>' + body;
+  const tabs = [['repositories', '仓库'], ['code', '代码'], ['users', '用户'], ['issues', '议题']];
+  const tabHtml = '<div class="repo-tabs">' + tabs.map(([k, label]) => {
+    const np = new URLSearchParams(params.toString());
+    np.set('type', k);
+    np.delete('page');
+    return '<a href="#/search?' + np.toString() + '" class="' + (type === k ? 'on' : '') + '">' +
+      label + '</a>';
+  }).join('') + '</div>';
+
+  app.innerHTML =
+    '<h2 class="page-title">“' + esc(q) + '” 的搜索结果</h2>' +
+    '<div class="search-summary dim">实际检索：<code>' + esc(query) + '</code></div>' +
+    tabHtml + searchFilterBar(type, f) + body + searchPager(params, page, total);
+
   bindFileRows();
+  app.querySelectorAll('.code-hit').forEach((el) => {
+    el.addEventListener('click', () => { location.hash = el.getAttribute('data-href'); });
+  });
+  bindSearchFilters();
 }
 
 /* ---------------------------- 我的 ---------------------------- */
@@ -4047,7 +4476,7 @@ async function route() {
 
     switch (seg[0]) {
       case 'search':
-        return await viewSearch(q.get('q') || '', q.get('type') || 'repositories');
+        return await viewSearch(q.get('q') || '', q.get('type') || 'repositories', q);
       case 'me':
         document.querySelector('.topnav a[data-nav="me"]').classList.add('on');
         return await viewMe();
@@ -4070,9 +4499,9 @@ async function route() {
           case 'blob':
             return await viewBlob(o, r, seg[4], seg.slice(5).join('/'));
           case 'issues':
-            return await viewIssues(o, r, 'issues', q.get('state'));
+            return await viewIssues(o, r, 'issues', q);
           case 'pulls':
-            return await viewIssues(o, r, 'pulls', q.get('state'));
+            return await viewIssues(o, r, 'pulls', q);
           case 'issue':
             return await viewIssue(o, r, seg[4], false);
           case 'pull':
@@ -4080,7 +4509,7 @@ async function route() {
           case 'releases':
             return await viewReleases(o, r);
           case 'commits':
-            return await viewCommits(o, r, seg[4]);
+            return await viewCommits(o, r, seg[4], q.get('page'));
           case 'commit':
             return viewCommit(o, r, seg[4]);
           case 'branches':
