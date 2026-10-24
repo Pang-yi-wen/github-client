@@ -1129,6 +1129,29 @@ async function tencentTranslate(list) {
   return out;
 }
 
+/** Pollinations：免密钥的文本生成接口，用作翻译通道。慢，适合兜底 */
+async function pollinationsTranslate(text) {
+  const q = 'Translate the following English text into Simplified Chinese. ' +
+    'Output only the translation, without explanation or quotes:\n\n' + text;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const res = await fetch('https://text.pollinations.ai/' + encodeURIComponent(q), {
+      signal: ctrl.signal
+    });
+    if (!res.ok) throw new Error('Pollinations HTTP ' + res.status);
+    let out = (await res.text()).trim();
+    if (!out) throw new Error('Pollinations 无返回');
+    // 去掉模型常见的引导语
+    out = out.replace(/^(?:以下是|译文|翻译|翻译结果)\s*[:：]\s*/, '')
+             .replace(/^(?:Sure|Here is the translation)[,，:：\s]*/i, '')
+             .replace(/^["“]([\s\S]*)["”]$/, '$1');
+    return out.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** MyMemory 单次上限 500 字符，超长先按句切开 */
 async function myMemoryLong(s) {
   if (s.length <= 460) return myMemoryTranslate(s);
@@ -1155,6 +1178,15 @@ async function translateBatch(items) {
   lastTrErr = null;
   try {
     return await tencentTranslate(items);
+  } catch (e) {
+    lastTrErr = e;
+  }
+
+  // Pollinations：AI 翻译，质量好但慢，用作第二顺位
+  try {
+    const out = [];
+    for (const s of items) out.push(await pollinationsTranslate(s));
+    return out;
   } catch (e) {
     lastTrErr = e;
   }
