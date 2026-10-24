@@ -3410,6 +3410,266 @@ function bindAuthBanner() {
   if (clip) clip.addEventListener('click', openFromClipboard);
 }
 
+/* ---------------------------- 翻译 ---------------------------- */
+
+/**
+ * 两条翻译通道：
+ *   1. 浏览器内置 Translator API（Chrome 138+ / Edge）—— 本地模型，不限量，内容不出本机
+ *   2. MyMemory 公共接口 —— 无需配置，但 500 字符/次、约 5000 字符/天
+ * 结果按「仓库@分支」缓存在 localStorage，翻一次就够。
+ */
+
+const TR_CACHE = 'ghtr:';
+let browserTr;   // undefined=未探测, null=不支持, 否则是 Translator 实例
+
+/** 粗略判断是否以英文为主：剔除代码、链接、标签后，汉字占比低于 10% 才算 */
+function looksEnglish(text) {
+  let t = String(text || '');
+  t = t.replace(/```[\s\S]*?```/g, ' ');          // 代码块
+  t = t.replace(/`[^`\n]*`/g, ' ');                // 行内代码
+  t = t.replace(/!?\[[^\]]*\]\([^)]*\)/g, ' ');    // 图片与链接（含 URL）
+  t = t.replace(/https?:\/\/\S+/g, ' ');           // 裸链接
+  t = t.replace(/<[^>]+>/g, ' ');                  // HTML 标签
+
+  const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latin = (t.match(/[A-Za-z]/g) || []).length;
+  const total = cjk + latin;
+  if (total < 120) return false;                   // 太短不判断
+  return cjk / total < 0.10;
+}
+
+/** 按代码围栏把 markdown 切成「代码」与「待译文本」 */
+function splitMd(md) {
+  const out = [];
+  const re = /```[\s\S]*?```/g;
+  let last = 0, m;
+  while ((m = re.exec(md)) !== null) {
+    if (m.index > last) out.push({ code: false, text: md.slice(last, m.index) });
+    out.push({ code: true, text: m[0] });
+    last = m.index + m[0].length;
+  }
+  if (last < md.length) out.push({ code: false, text: md.slice(last) });
+  return out;
+}
+
+/** 拆出行首标记，翻译只作用于标记之后的部分 */
+function splitLinePrefix(line) {
+  let m;
+  if ((m = line.match(/^(#{1,6}[ \t]+)/))) return [m[1], line.slice(m[1].length)];
+  if ((m = line.match(/^(\s*[-*+][ \t]+)/))) return [m[1], line.slice(m[1].length)];
+  if ((m = line.match(/^(\s*\d+\.[ \t]+)/))) return [m[1], line.slice(m[1].length)];
+  if ((m = line.match(/^(>[ \t]*)/))) return [m[1], line.slice(m[1].length)];
+  if ((m = line.match(/^(\s*\|)/))) return [m[1], line.slice(m[1].length)];
+  return ['', line];
+}
+
+/** 这些行不需要翻译 */
+function skipLine(line) {
+  const s = line.trim();
+  if (!s) return true;
+  if (/^\|?[\s:|-]+\|?$/.test(s)) return true;            // 表格分隔线
+  if (/^!\[[^\]]*\]\([^)]*\)$/.test(s)) return true;       // 纯图片
+  if (/^\[[^\]]+\]:\s*\S+/.test(s)) return true;           // 链接定义
+  if (/^<[^>]+>$/.test(s)) return true;                    // 单行 HTML
+  if (/^https?:\/\/\S+$/.test(s)) return true;             // 裸链接
+  if (!/[A-Za-z]/.test(s)) return true;                    // 没有英文
+  return false;
+}
+
+async function getBrowserTranslator() {
+  if (browserTr !== undefined) return browserTr;
+  if (typeof self.Translator !== 'object' || !self.Translator) { browserTr = null; return null; }
+  try {
+    if (self.Translator.availability) {
+      const st = await self.Translator.availability({ sourceLanguage: 'en', targetLanguage: 'zh' });
+      if (st === 'unavailable') { browserTr = null; return null; }
+      if (st === 'downloadable') { browserTr = null; return null; }  // 需要下载模型，不擅自触发
+    }
+    browserTr = await self.Translator.create({ sourceLanguage: 'en', targetLanguage: 'zh' });
+  } catch (_) {
+    browserTr = null;
+  }
+  return browserTr;
+}
+
+/** MyMemory：单次 500 字符上限 */
+async function myMemoryTranslate(text) {
+  const url = 'https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=' +
+    encodeURIComponent(text.slice(0, 480));
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('MyMemory HTTP ' + res.status);
+  const j = await res.json();
+  const out = j && j.responseData && j.responseData.translatedText;
+  if (!out) throw new Error('MyMemory 无结果');
+  if (/MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(out)) throw new Error(out);
+  return out;
+}
+
+/** 用户自建 LibreTranslate（设置里可选） */
+async function libreTranslate(text) {
+  const base = String(LS.get('ghl_translate', '') || '').trim().replace(/\/+$/, '');
+  if (!base) throw new Error('未配置');
+  const res = await fetch(base + '/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: text, source: 'en', target: 'zh', format: 'text' })
+  });
+  if (!res.ok) throw new Error('LibreTranslate HTTP ' + res.status);
+  const j = await res.json();
+  if (!j || !j.translatedText) throw new Error('LibreTranslate 无结果');
+  return j.translatedText;
+}
+
+/** 单批翻译，按可用性挑通道 */
+async function translateChunk(text) {
+  const bt = await getBrowserTranslator();
+  if (bt) {
+    try { return await bt.translate(text); } catch (_) {}
+  }
+  try { return await libreTranslate(text); } catch (_) {}
+  return myMemoryTranslate(text);
+}
+
+/** 把一段 markdown 文本逐段翻译，尽量保住结构 */
+async function translateBlock(text, onTick) {
+  const lines = text.split('\n');
+  const jobs = [];     // { idx, prefix, body }
+
+  lines.forEach((line, i) => {
+    if (skipLine(line)) return;
+    const [prefix, body] = splitLinePrefix(line);
+    if (!body.trim()) return;
+    jobs.push({ idx: i, prefix: prefix, body: body });
+  });
+
+  if (!jobs.length) return text;
+
+  // 合批，控制在 400 字符以内，减少请求次数
+  const batches = [];
+  let cur = [];
+  let len = 0;
+  jobs.forEach((j) => {
+    const add = j.body.length + 1;
+    if (cur.length && len + add > 400) { batches.push(cur); cur = []; len = 0; }
+    cur.push(j);
+    len += add;
+  });
+  if (cur.length) batches.push(cur);
+
+  const out = lines.slice();
+  let done = 0;
+
+  for (const batch of batches) {
+    const joined = batch.map((j) => j.body).join('\n');
+    let translated = null;
+    try {
+      translated = await translateChunk(joined);
+    } catch (_) {
+      translated = null;
+    }
+
+    if (translated && translated.split('\n').length === batch.length) {
+      translated.split('\n').forEach((l, k) => {
+        out[batch[k].idx] = batch[k].prefix + l;
+      });
+    } else if (translated) {
+      // 行数对不上，退化为整批替换首行，余下留原文
+      out[batch[0].idx] = batch[0].prefix + translated.replace(/\s*\n\s*/g, ' ');
+    }
+
+    done += batch.length;
+    if (onTick) onTick(done, jobs.length);
+  }
+
+  return out.join('\n');
+}
+
+async function translateMarkdown(md, onTick) {
+  const parts = splitMd(md);
+  const texts = parts.filter((p) => !p.code);
+  let idx = 0;
+  const out = [];
+
+  for (const p of parts) {
+    if (p.code) { out.push(p.text); continue; }
+    idx++;
+    out.push(await translateBlock(p.text, (a, b) => {
+      if (onTick) onTick(idx, texts.length, a, b);
+    }));
+  }
+  return out.join('');
+}
+
+function trCacheGet(key) {
+  try {
+    const raw = localStorage.getItem(TR_CACHE + key);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || Date.now() - rec.t > 7 * 864e5) return null;
+    return rec.v;
+  } catch (_) { return null; }
+}
+
+function trCacheSet(key, val) {
+  try {
+    localStorage.setItem(TR_CACHE + key, JSON.stringify({ t: Date.now(), v: val }));
+  } catch (_) {}
+}
+
+/**
+ * 给 README 面板挂上翻译开关。
+ * original：原文 markdown；bodyEl：渲染容器；render：把 markdown 变 HTML 的方法
+ */
+function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
+  let translated = trCacheGet(cacheKey);
+  let showing = false;
+
+  const paint = (md) => {
+    const box = renderMarkdown(md, ctx);
+    bodyEl.innerHTML = box.innerHTML;
+  };
+
+  const label = () => {
+    if (showing) btn.textContent = '看原文';
+    else if (translated) btn.textContent = '看译文';
+    else btn.textContent = '译成中文';
+  };
+  label();
+
+  btn.addEventListener('click', async () => {
+    if (showing) {
+      showing = false;
+      paint(original);
+      label();
+      return;
+    }
+    if (translated) {
+      showing = true;
+      paint(translated);
+      label();
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '翻译中…';
+    try {
+      const out = await translateMarkdown(original, (a, b) => {
+        btn.textContent = '翻译中 ' + a + '/' + b;
+      });
+      translated = out;
+      trCacheSet(cacheKey, out);
+      showing = true;
+      paint(out);
+      toast('已译为中文');
+    } catch (e) {
+      toast('翻译失败：' + e.message + '（可在设置里配置自建翻译接口）', 5000);
+    } finally {
+      btn.disabled = false;
+      label();
+    }
+  });
+}
+
 /* ---------------------------- 仓库概览 ---------------------------- */
 
 /* 语言配色沿用 GitHub linguist 的习惯用色 */
@@ -3515,14 +3775,19 @@ async function viewRepo(o, r) {
   };
 
   let readmeHtml = '';
+  let readmeSrc = null;
   if (readme && readme.content) {
     try {
-      const md = renderMarkdown(b64ToText(readme.content), ctx);
+      const raw = b64ToText(readme.content);
+      const md = renderMarkdown(raw, ctx);
+      const needTr = looksEnglish(raw);
+      readmeSrc = { text: raw, needTr: needTr };
       readmeHtml = `<div class="panel"><div class="panel-head">
           ${ICON.file}<span class="path-crumb">${esc(readme.path)}</span>
+          ${needTr ? '<button class="btn sm ghost" id="trBtn" title="把介绍译成中文">译成中文</button>' : ''}
           <span class="spacer"></span>
           <a class="btn sm ghost" href="${link(o, r, 'blob', ref, readme.path)}">源码</a>
-        </div><div class="readme-box markdown-body">${md.innerHTML}</div></div>`;
+        </div><div class="readme-box markdown-body" id="readmeBody">${md.innerHTML}</div></div>`;
     } catch (_) {}
   }
 
@@ -3556,6 +3821,14 @@ async function viewRepo(o, r) {
     </div>`;
 
   bindFileRows();
+
+  if (readmeSrc && readmeSrc.needTr) {
+    const trBtn = $('#trBtn');
+    const trBody = $('#readmeBody');
+    if (trBtn && trBody) {
+      bindTranslate(trBtn, trBody, readmeSrc.text, ctx, o + '/' + r + '@' + ref);
+    }
+  }
 }
 
 /* ---------------------------- 目录 ---------------------------- */
@@ -4636,6 +4909,21 @@ async function openSettings() {
       </div>
 
       <div class="set-block">
+        <h4>翻译接口 <span class="dim" style="font-weight:400">可选</span></h4>
+        <p class="hint" style="margin-bottom:8px">
+          英文介绍会多出一个「译成中文」按钮。默认优先用浏览器内置的本地翻译模型（不限量，内容不出本机），
+          不支持时降级到 MyMemory（500 字符/次、约 5000 字符/天）。自建了 LibreTranslate 的话，填地址可绕开这两个限制。
+        </p>
+        <input id="trl" type="text" placeholder="https://your-libretranslate.example.com"
+               value="${esc(LS.get('ghl_translate', ''))}" spellcheck="false">
+        <div class="modal-actions" style="margin-top:10px">
+          <button class="btn ghost sm" id="trlClear">清除</button>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="trlSave">保存</button>
+        </div>
+      </div>
+
+      <div class="set-block">
         <h4>当前通路</h4>
         ${chRows}
         <div class="modal-actions">
@@ -4668,6 +4956,18 @@ async function openSettings() {
     const n = clearCache();
     refreshCacheInfo();
     toast(n ? '已清空 ' + n + ' 项缓存' : '缓存本来就是空的');
+  });
+
+  $('#trlSave').addEventListener('click', () => {
+    const v = $('#trl').value.trim();
+    LS.set('ghl_translate', v);
+    toast(v ? '已保存翻译接口' : '已清除翻译接口');
+  });
+
+  $('#trlClear').addEventListener('click', () => {
+    LS.set('ghl_translate', '');
+    $('#trl').value = '';
+    toast('已清除翻译接口');
   });
 
   $('#tkClear').addEventListener('click', () => {
