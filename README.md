@@ -12,9 +12,9 @@
 | --- | --- | --- |
 | 直连 | `api.github.com` | 网络可达 GitHub |
 | 自建 | 自填，见 `worker.js` | 有自己的 Cloudflare Worker 或反代 |
-| 公共 | `gh-proxy.com` | 无需配置；额度由该站共享，常处于耗尽状态 |
+| 公共 | `gh-proxy.org` → `gh-proxy.com` | 无需配置；额度由该站共享，可能被用尽 |
 
-文件内容与 README 图片另走 raw 通道（`raw.githubusercontent.com` → 中转前缀 → API 二进制），不占 API 额度。因此 API 完全不可用时，仍能浏览已进入的仓库文件。
+文件内容与 README 图片另走 raw 通道（`raw.githubusercontent.com` → `gh-proxy.org` → `gh-proxy.com` → `ghfast.top` → API 二进制），不占 API 额度。因此 API 完全不可用时，仍能浏览已进入的仓库文件。
 
 探测端点用 `/rate_limit`，不消耗额度。顶栏徽标显示当前通路与延迟，绿色为直连或自建，黄色为公共中转。
 

@@ -2117,7 +2117,7 @@ return He}()
    ------------------------------------------------------------
    三条通路，按可用性与延迟自动切换：
      1. 直连 api.github.com      —— 最快，凭据不外流
-     2. 公共中转 gh-proxy.com     —— 零配置兜底，凭据会经过第三方
+     2. 公共中转 gh-proxy.org    —— 零配置兜底，凭据会经过第三方
      3. 自建中转（Worker/Nginx）  —— 用户自己部署，长期最稳
    探测端点用 /rate_limit：不消耗额度。
    ============================================================ */
@@ -2141,12 +2141,20 @@ const CH_DIRECT = {
 
 const CH_PUBLIC = [
   {
-    id: 'ghproxy',
-    label: 'gh-proxy',
+    id: 'ghproxy-org',
+    label: 'gh-proxy.org',
+    api: 'https://gh-proxy.org/' + API_HOST,
+    raw: 'https://gh-proxy.org/' + RAW_HOST,
+    trust: false,
+    note: '公共中转，官方新域名；额度由该站共享，可能被用尽'
+  },
+  {
+    id: 'ghproxy-com',
+    label: 'gh-proxy.com',
     api: 'https://gh-proxy.com/' + API_HOST,
     raw: 'https://gh-proxy.com/' + RAW_HOST,
     trust: false,
-    note: '公共中转，无需配置；API 额度由该站共享，多数时候已经耗尽，只作兜底'
+    note: '公共中转，旧域名，作备用'
   }
 ];
 
@@ -2198,6 +2206,7 @@ function rawSources(o, r, ref, p) {
               encodeURIComponent(ref) + '/' + encPath(p);
   const list = [
     RAW_HOST + '/' + seg,
+    'https://gh-proxy.org/' + RAW_HOST + '/' + seg,
     'https://gh-proxy.com/' + RAW_HOST + '/' + seg,
     'https://ghfast.top/' + RAW_HOST + '/' + seg
   ];
@@ -3687,14 +3696,14 @@ async function viewTools(o, r, ref) {
     <p class="hint">官方 codeload 通道通常最快；不通时可走中转前缀。</p>
     ${row('ZIP', has ? `https://codeload.github.com/${o}/${r}/zip/${f}` : 'https://codeload.github.com/OWNER/REPO/zip/HEAD',
       has ? `<a class="btn primary" href="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(f)}">下载</a>` : '')}
-    ${row('ZIP 中转', `https://gh-proxy.com/https://github.com/${has ? o + '/' + r : 'OWNER/REPO'}/archive/refs/heads/${f}.zip`)}
+    ${row('ZIP 中转', `https://gh-proxy.org/https://github.com/${has ? o + '/' + r : 'OWNER/REPO'}/archive/refs/heads/${f}.zip`)}
     ${row('TAR.GZ', has ? `https://codeload.github.com/${o}/${r}/tar.gz/${f}` : 'https://codeload.github.com/OWNER/REPO/tar.gz/HEAD')}
   </div>
 
   <div class="tool-card">
     <h3>git clone</h3>
     <p class="hint">GitHub 的 git 端点在部分网络下不可达，可加前缀。国内网络建议第一条。</p>
-    ${row('中转 1', `git clone https://gh-proxy.com/${repoUrl}.git`)}
+    ${row('中转 1', `git clone https://gh-proxy.org/${repoUrl}.git`)}
     ${row('中转 2', `git clone https://ghfast.top/${repoUrl}.git`)}
     ${row('原地址', `git clone ${repoUrl}.git`)}
   </div>
@@ -3703,7 +3712,7 @@ async function viewTools(o, r, ref) {
     <h3>单个文件</h3>
     <p class="hint">在本客户端里浏览文件、看 README 图片时无需关心这些地址，程序会自动挑可用的。</p>
     ${row('直连', rawBase)}
-    ${row('中转', `https://gh-proxy.com/${rawBase}`)}
+    ${row('中转', `https://gh-proxy.org/${rawBase}`)}
     ${row('备选', `https://ghfast.top/${rawBase}`)}
   </div>
 
