@@ -14,6 +14,12 @@ const OUT = path.join(ROOT, 'GitHub.html');
 
 const read = (p) => fs.readFileSync(p, 'utf8');
 
+/** 版本号来自仓库根目录的 VERSION 文件，构建时内联进产物 */
+const VERSION_FILE = path.join(ROOT, 'VERSION');
+const APP_VERSION = fs.existsSync(VERSION_FILE)
+  ? read(VERSION_FILE).trim().split('\n')[0].trim()
+  : 'dev';
+
 /** 给 hljs 主题加主题作用域，避免深浅两套互相覆盖 */
 function scopeCss(css, theme) {
   css = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -56,6 +62,7 @@ function main() {
 
   const html = shell
     .replace('/*{{STYLE}}*/', () => css)
+    .replace('/*{{VERSION}}*/', () => "const APP_VERSION = '" + APP_VERSION.replace(/[^\w.-]/g, '') + "';")
     .replace('/*{{MARKED}}*/', () => safeJs(marked))
     .replace('/*{{HLJS}}*/', () => safeJs(hljs))
     .replace('/*{{APP}}*/', () => safeJs(app));
@@ -64,6 +71,7 @@ function main() {
 
   const kb = (n) => (n / 1024).toFixed(1) + ' KB';
   console.log('built  ' + OUT);
+  console.log('  version  ' + APP_VERSION);
   console.log('  total    ' + kb(Buffer.byteLength(html)));
   console.log('  style    ' + kb(Buffer.byteLength(css)));
   console.log('  marked   ' + kb(Buffer.byteLength(marked)));

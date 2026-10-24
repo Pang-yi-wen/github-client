@@ -330,6 +330,22 @@ code, pre, .mono {
   color: var(--yellow);
 }
 
+/* 有新版本时才显示 */
+.upd-badge {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.upd-badge:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.upd-badge:disabled { opacity: .6; cursor: default; }
+.upd-badge[hidden] { display: none; }
+
 .ch-row {
   display: flex;
   align-items: center;

@@ -575,6 +575,160 @@ function bytesToText(buf) {
 
 const looksBinary = (buf) => buf.subarray(0, 8192).indexOf(0) !== -1;
 
+/* ---------------------------- 自动更新 ---------------------------- */
+
+/** 本客户端的来源仓库。读取其中的 VERSION 与最新构建产物 */
+const SELF_REPO = { owner: 'Pang-yi-wen', repo: 'github-client', branch: 'main' };
+
+/** 自动检查的最小间隔；手动检查不受限 */
+const UPD_INTERVAL = 6 * 3600 * 1000;
+
+const updEnabled = () => LS.get('ghl_upd_on', '1') !== '0';
+
+/** 更新源：默认 SELF_REPO，可用 ghl_upd_repo（owner/repo）覆盖，供 fork 使用 */
+function updRepo() {
+  const m = String(LS.get('ghl_upd_repo', '') || '').trim().match(/^([\w.-]+)\/([\w.-]+)$/);
+  return m ? { owner: m[1], repo: m[2], branch: 'main' } : SELF_REPO;
+}
+
+/** 版本号按点分段逐段数值比较，返回 -1 / 0 / 1 */
+function cmpVer(a, b) {
+  const pa = String(a || '0').split('.'), pb = String(b || '0').split('.');
+  for (let i = 0, n = Math.max(pa.length, pb.length); i < n; i++) {
+    const x = parseInt(pa[i] || '0', 10) || 0;
+    const y = parseInt(pb[i] || '0', 10) || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** raw 通道的全部候选地址，自建中转优先 */
+function rawBaseUrls(seg) {
+  const list = [
+    RAW_HOST + '/' + seg,
+    'https://gh-proxy.org/' + RAW_HOST + '/' + seg,
+    'https://gh-proxy.com/' + RAW_HOST + '/' + seg,
+    'https://ghfast.top/' + RAW_HOST + '/' + seg
+  ];
+  const c = chCustom();
+  if (c) {
+    const full = RAW_HOST + '/' + seg;
+    list.unshift(c.tpl.indexOf('{url}') >= 0
+      ? c.tpl.replace('{url}', encodeURIComponent(full))
+      : c.tpl.replace(/\/+$/, '') + '/' + full);
+  }
+  return list;
+}
+
+/** 读取来源仓库的 VERSION：先走 raw（不耗额度），全部失败再走 API */
+async function fetchRemoteVersion() {
+  const { owner, repo, branch } = updRepo();
+  const seg = owner + '/' + repo + '/' + branch + '/VERSION';
+  for (const url of rawBaseUrls(seg)) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 12000);
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const line = (await res.text()).trim().split('\n')[0].trim();
+      if (line) return line;
+    } catch (_) {}
+  }
+  try {
+    const j = await gh('/repos/' + owner + '/' + repo + '/contents/VERSION?ref=' + branch, { cache: false });
+    if (j && j.content) return b64ToText(j.content).trim().split('\n')[0].trim();
+  } catch (_) {}
+  return null;
+}
+
+let updAvailable = null;
+
+function setUpdBadge(ver) {
+  const b = $('#upd');
+  if (!b) return;
+  if (ver) {
+    b.textContent = '↑ ' + ver;
+    b.hidden = false;
+    b.title = '发现新版本 ' + ver + '，点击更新';
+  } else {
+    b.hidden = true;
+  }
+}
+
+/**
+ * 检查更新。force 为 true 时忽略间隔限制（设置面板的手动检查）。
+ * 自动检查失败不提示，避免打扰；仅在确实发现新版本时给出徽标与提示。
+ */
+async function checkUpdate(force) {
+  if (!force && !updEnabled()) return updAvailable;
+  const last = Number(LS.get('ghl_upd_last', '0') || 0);
+  if (!force && Date.now() - last < UPD_INTERVAL) return updAvailable;
+  LS.set('ghl_upd_last', String(Date.now()));
+
+  let remote = null;
+  try {
+    remote = await fetchRemoteVersion();
+  } catch (_) {}
+  if (!remote) return updAvailable;
+
+  if (cmpVer(remote, APP_VERSION) > 0) {
+    updAvailable = { version: remote };
+    setUpdBadge(remote);
+    toast('发现新版本 ' + remote + '，点击顶栏箭头更新', 6000);
+  } else {
+    updAvailable = null;
+    setUpdBadge(null);
+    if (force) toast('已是最新版本（' + APP_VERSION + '）');
+  }
+  return updAvailable;
+}
+
+/** 获取最新构建产物：http(s) 页面热替换文档，file:// 页面下载文件 */
+async function applyUpdate() {
+  if (!updAvailable) return;
+  const { owner, repo, branch } = updRepo();
+  const seg = owner + '/' + repo + '/' + branch + '/GitHub.html';
+  const btn = $('#upd');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '获取中…'; }
+  try {
+    let html = null;
+    for (const url of rawBaseUrls(seg)) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30000);
+        const res = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        // 简单校验：确实是完整的单文件应用
+        if (text.length > 50000 && text.indexOf('GitHub') >= 0) { html = text; break; }
+      } catch (_) {}
+    }
+    if (!html) throw new Error('无法获取新版本文件');
+
+    if (location.protocol === 'file:') {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+      a.download = 'GitHub.html';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast('新版本 ' + updAvailable.version + ' 已下载，替换原文件后重新打开');
+    } else {
+      toast('正在切换到 ' + updAvailable.version);
+      document.open();
+      document.write(html);
+      document.close();
+    }
+  } catch (e) {
+    toast('更新失败：' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
 /* ---------------------------- Markdown ---------------------------- */
 
 const mdRenderer = new marked.Renderer();
@@ -2866,6 +3020,29 @@ async function openSettings() {
       </div>
 
       <div class="set-block">
+        <h4>自动更新</h4>
+        <p class="hint" style="margin-bottom:10px">
+          当前版本 <b id="updVer"></b>。每隔最多 6 小时读取一次来源仓库的 <code>VERSION</code> 文件，
+          发现新版本时顶栏显示箭头，点击即更新。http(s) 页面直接热替换；本地 file:// 页面则下载新文件，
+          替换原文件后重新打开。
+        </p>
+        <label class="form-check" style="margin-bottom:10px">
+          <input type="checkbox" id="updOn" ${updEnabled() ? 'checked' : ''}>
+          <span>启用自动检查（默认开启）</span>
+        </label>
+        <label class="filt" style="margin-bottom:10px">
+          <span>更新源</span>
+          <input id="updRepo" type="text" placeholder="owner/repo，留空为默认源"
+                 value="${esc(LS.get('ghl_upd_repo', ''))}" spellcheck="false" style="flex:1">
+        </label>
+        <div class="modal-actions">
+          <span class="dim" id="updStatus" style="font-size:11.5px"></span>
+          <span class="spacer"></span>
+          <button class="btn sm" id="updCheck">检查更新</button>
+        </div>
+      </div>
+
+      <div class="set-block">
         <h4>当前通路</h4>
         ${chRows}
         <div class="modal-actions">
@@ -2938,6 +3115,55 @@ async function openSettings() {
     $('#trlKey').value = '';
     toast('已恢复自动');
     refreshTrStatus();
+  });
+
+  const updVer = $('#updVer');
+  if (updVer) updVer.textContent = APP_VERSION;
+
+  const refreshUpdStatus = () => {
+    const el = $('#updStatus');
+    if (!el) return;
+    const last = Number(LS.get('ghl_upd_last', '0') || 0);
+    const bits = [];
+    if (updAvailable) bits.push('发现新版本 ' + updAvailable.version);
+    else if (last) bits.push('上次检查 ' + new Date(last).toLocaleString('zh-CN'));
+    else bits.push('尚未检查');
+    el.textContent = bits.join(' · ');
+  };
+  refreshUpdStatus();
+
+  const updOn = $('#updOn');
+  if (updOn) {
+    updOn.addEventListener('change', () => {
+      LS.set('ghl_upd_on', updOn.checked ? '1' : '0');
+      toast(updOn.checked ? '已启用自动检查更新' : '已关闭自动检查更新');
+    });
+  }
+
+  const updRepoEl = $('#updRepo');
+  if (updRepoEl) {
+    updRepoEl.addEventListener('change', () => {
+      const v = updRepoEl.value.trim();
+      if (v && !/^[\w.-]+\/[\w.-]+$/.test(v)) {
+        toast('格式应为 owner/repo');
+        updRepoEl.value = LS.get('ghl_upd_repo', '');
+        return;
+      }
+      LS.set('ghl_upd_repo', v);
+      toast(v ? '更新源已设为 ' + v : '更新源已恢复默认');
+    });
+  }
+
+  $('#updCheck').addEventListener('click', async () => {
+    const st = $('#updStatus');
+    if (st) st.textContent = '检查中…';
+    const r = await checkUpdate(true);
+    if (r) {
+      if (st) st.textContent = '发现新版本 ' + r.version + '，点击顶栏箭头更新';
+      toast('发现新版本 ' + r.version);
+    } else {
+      if (st) st.textContent = '已是最新版本 ' + APP_VERSION;
+    }
   });
 
   $('#tkClear').addEventListener('click', () => {
@@ -4092,7 +4318,9 @@ document.addEventListener('DOMContentLoaded', () => {
   updateAuthBadge();
   $('#auth').addEventListener('click', openSettings);
   $('#ch').addEventListener('click', openSettings);
+  $('#upd').addEventListener('click', applyUpdate);
   if (!location.hash) location.hash = '#/';
   route();
+  checkUpdate();
   ensureChannels();
 });
