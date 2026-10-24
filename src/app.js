@@ -1967,6 +1967,7 @@ async function viewIssues(o, r, kind, params) {
       <div class="panel-head">
         <a class="btn sm ${state === 'open' ? 'primary' : 'ghost'}" href="${mk({ state: 'open', page: '' })}">打开</a>
         <a class="btn sm ${state === 'closed' ? 'primary' : 'ghost'}" href="${mk({ state: 'closed', page: '' })}">已关闭</a>
+        ${canWrite() ? '<button type="button" class="btn sm" id="newIt">' + (isPR ? '新建 PR' : '新建 Issue') + '</button>' : ''}
         <span class="spacer"></span>
         <span class="dim">${items.length} 条</span>
       </div>
@@ -1991,6 +1992,14 @@ async function viewIssues(o, r, kind, params) {
   if (s2) s2.addEventListener('change', () => apply('dir', s2.value));
   const s3 = $('#i-label');
   if (s3) s3.addEventListener('change', () => apply('label', s3.value));
+
+  const ni = $('#newIt');
+  if (ni) {
+    ni.addEventListener('click', () => {
+      if (isPR) openNewPrDialog(o, r, repo.default_branch);
+      else openNewIssueDialog(o, r);
+    });
+  }
 }
 
 function issueRow(it, isPR) {
@@ -2076,13 +2085,14 @@ async function viewIssue(o, r, n, isPR) {
       </div>
     </div>
     ${commentsHtml}${filesPanel}
-    <p class="foot-note">只读视图。回复、关闭等写操作需在原站点完成——github.com 在当前网络下不可达。</p>`;
+    ${issueWriteBox(issue, n)}`;
 
   comments.forEach((c, i) => {
     const el = app.querySelector('[data-cmt="' + i + '"]');
     if (el) el.innerHTML = renderMarkdown(c.body || '', ctx).innerHTML;
   });
   bindFileRows();
+  bindIssueWrite(o, r, n, issue);
 }
 
 /* ---------------------------- Releases / Commits / Branches ---------------------------- */
@@ -3319,6 +3329,186 @@ function openUploadDialog(o, r) {
   });
 
   paint();
+}
+
+/* ---------- 新建 Issue ---------- */
+
+function openNewIssueDialog(o, r) {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>新建 Issue</h3>' +
+      '<p class="hint">提交到 ' + esc(o + '/' + r) + '</p>' +
+      '<input id="niTitle" type="text" placeholder="标题" spellcheck="false">' +
+      '<textarea id="niBody" placeholder="正文，支持 Markdown"></textarea>' +
+      '<input id="niLabels" type="text" placeholder="标签，逗号分隔（可选）" spellcheck="false">' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="niMsg" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="niCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="niGo">提交</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#niCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#niTitle').focus();
+
+  $('#niGo').addEventListener('click', async () => {
+    const title = $('#niTitle').value.trim();
+    if (!title) { $('#niMsg').textContent = '标题不能为空'; return; }
+    const labels = $('#niLabels').value.split(',').map((s) => s.trim()).filter(Boolean);
+
+    $('#niGo').disabled = true;
+    $('#niMsg').textContent = '提交中…';
+    try {
+      const out = await ghWrite('POST', '/repos/' + o + '/' + r + '/issues', {
+        title: title,
+        body: $('#niBody').value,
+        labels: labels
+      });
+      close();
+      toast('已创建 #' + out.number);
+      location.hash = link(o, r, 'issue', out.number);
+    } catch (e) {
+      $('#niGo').disabled = false;
+      $('#niMsg').textContent = e.message;
+    }
+  });
+}
+
+/* ---------- 新建 Pull Request ---------- */
+
+async function openNewPrDialog(o, r, defaultBranch) {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  loading();
+  let branches = [];
+  try {
+    branches = await gh('/repos/' + o + '/' + r + '/branches?per_page=100');
+  } catch (_) {}
+  if (!Array.isArray(branches)) branches = [];
+
+  const opts = branches.map((b) =>
+    '<option value="' + esc(b.name) + '"' + (b.name === defaultBranch ? ' selected' : '') + '>' +
+    esc(b.name) + '</option>').join('');
+
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>新建 Pull Request</h3>' +
+      '<p class="hint">提交到 ' + esc(o + '/' + r) + '。若分支未列出，请先在原站推送该分支。</p>' +
+      '<input id="npTitle" type="text" placeholder="标题" spellcheck="false">' +
+      '<textarea id="npBody" placeholder="说明，支持 Markdown"></textarea>' +
+      '<div class="form-row">' +
+        '<label class="filt"><span>合并到</span><select id="npBase">' + opts + '</select></label>' +
+        '<label class="filt"><span>来自</span><select id="npHead">' + opts + '</select></label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="npMsg" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="npCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="npGo">提交</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#npCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#npTitle').focus();
+
+  $('#npGo').addEventListener('click', async () => {
+    const title = $('#npTitle').value.trim();
+    if (!title) { $('#npMsg').textContent = '标题不能为空'; return; }
+    const head = $('#npHead').value;
+    const base = $('#npBase').value;
+    if (head === base) { $('#npMsg').textContent = '来源与目标分支不能相同'; return; }
+
+    $('#npGo').disabled = true;
+    $('#npMsg').textContent = '提交中…';
+    try {
+      const out = await ghWrite('POST', '/repos/' + o + '/' + r + '/pulls', {
+        title: title,
+        body: $('#npBody').value,
+        head: head,
+        base: base
+      });
+      close();
+      toast('已创建 #' + out.number);
+      location.hash = link(o, r, 'pull', out.number);
+    } catch (e) {
+      $('#npGo').disabled = false;
+      $('#npMsg').textContent = e.message;
+    }
+  });
+}
+
+/* ---------- 评论与状态 ---------- */
+
+async function submitComment(o, r, n, body, btn, area) {
+  if (!body.trim()) { toast('评论内容为空'); return; }
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    await ghWrite('POST', '/repos/' + o + '/' + r + '/issues/' + n + '/comments', { body: body });
+    area.value = '';
+    toast('评论已提交');
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    toast('提交失败：' + e.message, 5000);
+  }
+}
+
+/** Issue 与 PR 共用 issues 端点改状态 */
+async function setIssueState(o, r, n, state, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  try {
+    await ghWrite('PATCH', '/repos/' + o + '/' + r + '/issues/' + n, { state: state });
+    toast(state === 'closed' ? '已关闭' : '已重新打开');
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    toast('操作失败：' + e.message, 5000);
+  }
+}
+
+function issueWriteBox(issue, n) {
+  if (!canWrite()) {
+    return '<p class="foot-note">只读视图。回复与状态变更需在设置中启用写操作后进行。</p>';
+  }
+  const next = issue.state === 'open' ? 'closed' : 'open';
+  return '<div class="issue-write">' +
+    '<textarea id="cmtBody" placeholder="写下评论，支持 Markdown"></textarea>' +
+    '<div class="modal-actions" style="margin-top:8px">' +
+      '<button type="button" class="btn sm" id="cmtSend">发表评论</button>' +
+      '<span class="spacer"></span>' +
+      '<button type="button" class="btn sm ghost" id="cmtState">' +
+        (next === 'closed' ? '关闭' : '重新打开') + '</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function bindIssueWrite(o, r, n, issue) {
+  const send = $('#cmtSend');
+  const area = $('#cmtBody');
+  if (send && area) {
+    send.addEventListener('click', () => submitComment(o, r, n, area.value, send, area));
+  }
+  const st = $('#cmtState');
+  if (st) {
+    st.addEventListener('click', () => {
+      setIssueState(o, r, n, issue.state === 'open' ? 'closed' : 'open', st);
+    });
+  }
 }
 
 /* ---------------------------- 搜索面板 ---------------------------- */

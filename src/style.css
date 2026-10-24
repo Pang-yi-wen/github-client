@@ -516,14 +516,54 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.form-check {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  color: var(--fg-muted);
-  margin: 4px 0 12px;
-  flex-wrap: wrap;
+.dialog textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 9px 11px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.65;
+  outline: none;
+  resize: vertical;
+}
+.dialog textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.form-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.form-row .filt { flex: 1; min-width: 130px; }
+
+/* 详情页的评论框与状态操作 */
+.issue-write {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+.issue-write textarea {
+  width: 100%;
+  min-height: 78px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.65;
+  outline: none;
+  resize: vertical;
+}
+.issue-write textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 .form-check input { accent-color: var(--accent); }
 .form-check label { display: inline-flex; align-items: center; gap: 6px; }
