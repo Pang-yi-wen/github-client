@@ -935,7 +935,7 @@ async function viewHome() {
       <a class="btn" href="#/search?q=stars:%3E10000&type=repositories">热门仓库</a>
       <button class="btn" id="fromClip">从剪贴板打开</button>
     </div>
-    <p class="hero-tip">把 github.com 的链接粘进上方搜索框，会直接跳到对应页面——仓库、文件、Issue、PR、发行版都认。</p>
+    <p class="hero-tip">点开上方搜索会展开整个面板：挑好类型与条件再一次提交，粘 github.com 链接则直接跳到对应页面。</p>
     <div class="grid-2">
       <div class="panel">
         <div class="panel-head">近期热门</div>
@@ -1672,55 +1672,56 @@ function composeSearchQuery(base, type, f) {
   return out.filter(Boolean).join(' ');
 }
 
-function searchFilterBar(type, f) {
+function searchFilterBar(type, f, prefix) {
+  const p = prefix || 'f-';
   const opt = (v, t, cur) =>
     '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(t) + '</option>';
-  const box = (id, label, control) =>
+  const box = (label, control) =>
     '<label class="filt"><span>' + label + '</span>' + control + '</label>';
-  const select = (id, pairs, cur) =>
-    '<select id="' + id + '">' + pairs.map(([v, t]) => opt(v, t, cur)).join('') + '</select>';
-  const input = (id, ph, cur) =>
-    '<input id="' + id + '" type="text" placeholder="' + esc(ph) + '" value="' + esc(cur) + '">';
+  const select = (name, pairs, cur) =>
+    '<select id="' + p + name + '">' + pairs.map(([v, t]) => opt(v, t, cur)).join('') + '</select>';
+  const input = (name, ph, cur) =>
+    '<input id="' + p + name + '" type="text" placeholder="' + esc(ph) + '" value="' + esc(cur) + '">';
 
   const parts = [];
 
   if (type === 'repositories') {
-    parts.push(box('sort', '排序', select('f-sort', [
+    parts.push(box('排序', select('sort', [
       ['', '最佳匹配'], ['stars', 'Star 最多'], ['forks', 'Fork 最多'],
       ['updated', '最近更新'], ['help-wanted-issues', '待协助最多']
     ], f.sort)));
-    parts.push(box('lang', '语言', select('f-lang', SEARCH_LANGS, f.lang)));
-    parts.push(box('stars', 'Star', select('f-stars', [
+    parts.push(box('语言', select('lang', SEARCH_LANGS, f.lang)));
+    parts.push(box('Star', select('stars', [
       ['', '不限'], ['50', '≥ 50'], ['500', '≥ 500'], ['5000', '≥ 5000'], ['20000', '≥ 2 万']
     ], f.stars)));
-    parts.push(box('pushed', '更新', select('f-pushed', [
+    parts.push(box('更新', select('pushed', [
       ['', '不限'], ['week', '一周内'], ['month', '一月内'], ['year', '一年内']
     ], f.pushed)));
   } else if (type === 'code') {
-    parts.push(box('lang', '语言', select('f-lang', SEARCH_LANGS, f.lang)));
-    parts.push(box('repo', '限定仓库', input('f-repo', 'owner/repo', f.repo)));
-    parts.push(box('path', '路径', input('f-path', 'src/components', f.path)));
+    parts.push(box('语言', select('lang', SEARCH_LANGS, f.lang)));
+    parts.push(box('限定仓库', input('repo', 'owner/repo', f.repo)));
+    parts.push(box('路径', input('path', 'src/components', f.path)));
   } else if (type === 'users') {
-    parts.push(box('sort', '排序', select('f-sort', [
+    parts.push(box('排序', select('sort', [
       ['', '最佳匹配'], ['followers', '关注者最多'], ['repositories', '仓库最多'], ['joined', '最近加入']
     ], f.sort)));
-    parts.push(box('utype', '类型', select('f-utype', [
+    parts.push(box('类型', select('utype', [
       ['', '不限'], ['user', '用户'], ['org', '组织']
     ], f.utype)));
-    parts.push(box('repos', '仓库数', select('f-repos', [
+    parts.push(box('仓库数', select('repos', [
       ['', '不限'], ['10', '≥ 10'], ['50', '≥ 50'], ['200', '≥ 200']
     ], f.repos)));
   } else if (type === 'issues') {
-    parts.push(box('sort', '排序', select('f-sort', [
+    parts.push(box('排序', select('sort', [
       ['', '最佳匹配'], ['comments', '评论最多'], ['created', '最新创建'], ['updated', '最近更新']
     ], f.sort)));
-    parts.push(box('state', '状态', select('f-state', [
+    parts.push(box('状态', select('state', [
       ['', '不限'], ['open', '打开'], ['closed', '已关闭']
     ], f.state)));
-    parts.push(box('kind', '类型', select('f-kind', [
+    parts.push(box('类型', select('kind', [
       ['', '议题和 PR'], ['issue', '仅议题'], ['pr', '仅 PR']
     ], f.kind)));
-    parts.push(box('label', '标签', input('f-label', 'bug', f.label)));
+    parts.push(box('标签', input('label', 'bug', f.label)));
   }
 
   return '<div class="filter-bar">' + parts.join('') + '</div>';
@@ -2306,108 +2307,158 @@ async function route() {
   }
 }
 
-/* ---------------------------- 搜索框 ---------------------------- */
+/* ---------------------------- 搜索面板 ---------------------------- */
 
-let suggestTimer = null;
-let suggestIdx = -1;
+const SEARCH_TYPES = [
+  ['repositories', '仓库'], ['code', '代码'], ['users', '用户'], ['issues', '议题']
+];
+
+function emptyFilters() {
+  return {
+    sort: '', lang: '', stars: '', pushed: '', repo: '', path: '',
+    label: '', utype: '', repos: '', state: '', kind: ''
+  };
+}
+
+/**
+ * 顶栏的搜索只是一个触发器，点开才铺满整个面板。
+ * 条件在这里一次挑好，提交时拼成 URL 交给搜索结果页。
+ */
+function openSearchPanel(opts) {
+  opts = opts || {};
+  const mask = $('#modal');
+  if (!mask.hidden) return;
+
+  mask.hidden = false;
+  mask.classList.add('top');
+
+  const st = {
+    q: opts.q || '',
+    type: opts.type || 'repositories',
+    f: opts.f || emptyFilters()
+  };
+
+  function onEsc(e) {
+    if (e.key === 'Escape') close();
+  }
+
+  const close = () => {
+    mask.hidden = true;
+    mask.classList.remove('top');
+    mask.innerHTML = '';
+    mask.onclick = null;
+    document.removeEventListener('keydown', onEsc);
+  };
+
+  const preview = () => {
+    const el = $('#sp-preview');
+    if (!el) return;
+    const raw = st.q.trim();
+    if (!raw) { el.innerHTML = ''; return; }
+    const parsed = parseGithubUrl(raw);
+    if (parsed) {
+      el.innerHTML = '<span class="sp-ok">将直接打开 ' + esc(parsed.label) + '</span>';
+      return;
+    }
+    el.innerHTML = '实际检索 <code>' + esc(composeSearchQuery(raw, st.type, st.f)) + '</code>';
+  };
+
+  const go = () => {
+    const raw = st.q.trim();
+    if (!raw) { toast('先输入关键词或链接'); return; }
+    const parsed = parseGithubUrl(raw);
+    if (parsed) {
+      close();
+      location.hash = parsed.hash;
+      return;
+    }
+    const np = new URLSearchParams();
+    np.set('q', raw);
+    np.set('type', st.type);
+    Object.keys(st.f).forEach((k) => { if (st.f[k]) np.set(k, st.f[k]); });
+    close();
+    location.hash = '#/search?' + np.toString();
+  };
+
+  const bindFilters = () => {
+    Object.keys(emptyFilters()).forEach((k) => {
+      const el = document.getElementById('sp-' + k);
+      if (!el) return;
+      const sync = () => {
+        st.f[k] = String(el.value || '').trim();
+        preview();
+      };
+      el.addEventListener('change', sync);
+      if (el.tagName === 'INPUT') {
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); sync(); go(); }
+        });
+      }
+    });
+  };
+
+  const draw = () => {
+    mask.innerHTML =
+      '<div class="search-panel">' +
+        '<div class="sp-input-row">' +
+          '<svg viewBox="0 0 16 16" width="17" height="17" class="sp-ico">' +
+            '<path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.5 4.5 0 1 0-8.999 0 4.5 4.5 0 0 0 8.999 0Z"/>' +
+          '</svg>' +
+          '<input id="sp-q" type="text" placeholder="输入关键词，或粘贴 GitHub 链接" value="' +
+            esc(st.q) + '" autocomplete="off" spellcheck="false">' +
+        '</div>' +
+        '<div class="sp-types">' +
+          SEARCH_TYPES.map(([k, l]) =>
+            '<button type="button" class="sp-type' + (st.type === k ? ' on' : '') +
+            '" data-t="' + k + '">' + l + '</button>').join('') +
+        '</div>' +
+        '<div class="sp-filters">' + searchFilterBar(st.type, st.f, 'sp-') + '</div>' +
+        '<div class="sp-preview" id="sp-preview"></div>' +
+        '<div class="sp-actions">' +
+          '<span class="sp-hint">Enter 搜索　Esc 关闭</span>' +
+          '<span class="spacer"></span>' +
+          '<button type="button" class="btn primary" id="sp-go">搜索</button>' +
+        '</div>' +
+      '</div>';
+
+    const input = $('#sp-q');
+    input.focus();
+    const len = input.value.length;
+    input.setSelectionRange(len, len);
+
+    input.addEventListener('input', () => { st.q = input.value; preview(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); go(); }
+    });
+
+    mask.querySelectorAll('.sp-type').forEach((b) => {
+      b.addEventListener('click', () => {
+        st.type = b.getAttribute('data-t');
+        draw();
+      });
+    });
+
+    $('#sp-go').addEventListener('click', go);
+    bindFilters();
+    preview();
+  };
+
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  document.addEventListener('keydown', onEsc);
+  draw();
+}
 
 function setupSearch() {
-  const input = $('#q');
-  const box = $('#suggest');
-
-  const go = (hash) => {
-    location.hash = hash;
-    box.hidden = true;
-    input.value = '';
-    input.classList.remove('is-url');
-    input.blur();
-  };
-
-  /** 粘贴了可识别的 GitHub 链接时，只显示一个「打开」项 */
-  const renderOpen = (parsed) => {
-    box.innerHTML = `<div class="s-item open-item" data-href="${parsed.hash}">
-      ${ICON.link}
-      <span class="s-name">打开 <b>${esc(parsed.label)}</b></span>
-      <span class="s-sub">Enter</span>
-    </div>`;
-    box.hidden = false;
-    box.querySelector('.s-item').addEventListener('click', () => go(parsed.hash));
-  };
-
-  input.addEventListener('input', () => {
-    clearTimeout(suggestTimer);
-    suggestIdx = -1;
-    const v = input.value.trim();
-
-    // 链接优先：识别成功就不再走搜索
-    const parsed = parseGithubUrl(v);
-    input.classList.toggle('is-url', !!parsed);
-    if (parsed) { renderOpen(parsed); return; }
-
-    if (v.length < 2) { box.hidden = true; return; }
-    suggestTimer = setTimeout(async () => {
-      try {
-        const res = await gh('/search/repositories?q=' + encodeURIComponent(v) + '&per_page=7');
-        if (!res.items || !res.items.length) { box.hidden = true; return; }
-        box.innerHTML = res.items.map(it => `
-          <div class="s-item" data-href="${link(it.owner.login, it.name)}">
-            ${ICON.folder}
-            <span class="s-name">${esc(it.full_name)}</span>
-            <span class="s-sub">${ICON.star} ${fmtNum(it.stargazers_count)}</span>
-          </div>`).join('') +
-          `<div class="s-item" data-href="#/search?q=${encodeURIComponent(v)}&type=repositories">
-            ${ICON.link}<span class="s-name">查看 “${esc(v)}” 的全部结果</span></div>`;
-        box.hidden = false;
-        suggestIdx = -1;
-        box.querySelectorAll('.s-item').forEach(el => {
-          el.addEventListener('click', () => go(el.getAttribute('data-href')));
-        });
-      } catch (_) { box.hidden = true; }
-    }, 340);
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { box.hidden = true; input.blur(); return; }
-
-    // Enter 先看是不是链接，是就直接跳
-    if (e.key === 'Enter') {
-      const parsed = parseGithubUrl(input.value.trim());
-      if (parsed) { e.preventDefault(); go(parsed.hash); return; }
-    }
-
-    const items = box.querySelectorAll('.s-item');
-    if (box.hidden || !items.length) {
-      if (e.key === 'Enter' && input.value.trim()) {
-        e.preventDefault();
-        go('#/search?q=' + encodeURIComponent(input.value.trim()) + '&type=repositories');
-      }
-      return;
-    }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      suggestIdx = e.key === 'ArrowDown'
-        ? Math.min(suggestIdx + 1, items.length - 1)
-        : Math.max(suggestIdx - 1, 0);
-      items.forEach((it, i) => it.classList.toggle('active', i === suggestIdx));
-      return;
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (suggestIdx >= 0 && items[suggestIdx]) items[suggestIdx].click();
-      else go('#/search?q=' + encodeURIComponent(input.value.trim()) + '&type=repositories');
-    }
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.search-wrap')) box.hidden = true;
-  });
+  const trigger = $('#q');
+  if (trigger) trigger.addEventListener('click', () => openSearchPanel());
 
   document.addEventListener('keydown', (e) => {
     const tag = document.activeElement ? document.activeElement.tagName : '';
-    if ((e.key === '/' || (e.ctrlKey && e.key === 'k')) && tag !== 'INPUT' && tag !== 'TEXTAREA') {
+    const inField = tag === 'INPUT' || tag === 'TEXTAREA';
+    const isCmdK = (e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K');
+    if ((e.key === '/' && !inField) || isCmdK) {
       e.preventDefault();
-      input.focus();
-      input.select();
+      openSearchPanel();
     }
   });
 }
@@ -2419,23 +2470,21 @@ async function openFromClipboard() {
   try {
     text = await navigator.clipboard.readText();
   } catch (e) {
-    toast('读不到剪贴板，请手动粘贴到搜索框');
-    const q = $('#q');
-    if (q) { q.focus(); }
+    toast('读不到剪贴板');
+    openSearchPanel();
     return;
   }
   const parsed = parseGithubUrl(text);
   if (parsed) {
     location.hash = parsed.hash;
     toast('已打开 ' + parsed.label);
+    return;
+  }
+  const t = String(text || '').trim();
+  if (t && t.length < 120) {
+    openSearchPanel({ q: t });
   } else {
-    const t = String(text || '').trim();
-    if (t && t.length < 120) {
-      location.hash = '#/search?q=' + encodeURIComponent(t) + '&type=repositories';
-      toast('剪贴板不是 GitHub 链接，按关键词搜索');
-    } else {
-      toast('剪贴板里没有可用的链接或关键词');
-    }
+    toast('剪贴板里没有可用的链接或关键词');
   }
 }
 

@@ -19,9 +19,11 @@
   </a>
 
   <div class="search-wrap">
-    <svg class="search-ico" viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.5 4.5 0 1 0-8.999 0 4.5 4.5 0 0 0 8.999 0Z"/></svg>
-    <input id="q" type="search" placeholder="搜索，或粘贴 GitHub 链接" autocomplete="off" spellcheck="false">
-    <div id="suggest" class="suggest" hidden></div>
+    <button id="q" class="search-trigger" type="button" aria-label="打开搜索">
+      <svg class="search-ico" viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.5 4.5 0 1 0-8.999 0 4.5 4.5 0 0 0 8.999 0Z"/></svg>
+      <span class="st-text">搜索，或粘贴 GitHub 链接</span>
+      <kbd class="st-kbd">/</kbd>
+    </button>
   </div>
 
   <nav class="topnav">
