@@ -842,8 +842,69 @@ function avatar(url, size) {
     'onerror="this.style.visibility=\'hidden\'">';
 }
 
-function repoHeader(repo, tab) {
+/** 当前页面对应的 GitHub 原地址，可打开也可复制 */
+function srcLink(url) {
+  if (!url) return '';
+  return '<div class="gh-src">' + ICON.link +
+    '<a href="' + esc(url) + '" target="_blank" rel="noopener" title="在新标签页打开">' +
+    esc(String(url).replace(/^https:\/\//, '')) + '</a>' +
+    '<button type="button" class="gh-src-cp" data-url="' + esc(url) + '" title="复制原网址">复制</button>' +
+    '</div>';
+}
+
+function bindSrcLinks(scope) {
+  (scope || app).querySelectorAll('.gh-src-cp').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      copyText(b.getAttribute('data-url'));
+    });
+  });
+}
+
+/** 由当前路由推导出对应的 GitHub 原地址 */
+function githubUrlFromRoute() {
+  let seg, q;
+  try {
+    const parsed = parseHash();
+    seg = parsed.seg;
+    q = parsed.q;
+  } catch (_) {
+    return '';
+  }
+
+  if (seg[0] === 'u' && seg[1]) return 'https://github.com/' + seg[1];
+  if (seg[0] !== 'r' || !seg[1] || !seg[2]) return '';
+
+  const o = seg[1], r = seg[2], kind = seg[3];
+  const base = 'https://github.com/' + o + '/' + r;
+  if (!kind) return base;
+
+  if (kind === 'tree' || kind === 'blob') {
+    const ref = seg[4] || '';
+    const p = seg.slice(5).join('/');
+    return base + '/' + kind + '/' + ref + (p ? '/' + p : '');
+  }
+  if (kind === 'issues') {
+    if (seg[4]) return base + '/issues/' + seg[4];
+    return base + '/issues' + (q.get('state') === 'closed' ? '?q=is%3Aissue+is%3Aclosed' : '');
+  }
+  if (kind === 'pulls') {
+    if (seg[4]) return base + '/pull/' + seg[4];
+    return base + '/pulls' + (q.get('state') === 'closed' ? '?q=is%3Apr+is%3Aclosed' : '');
+  }
+  if (kind === 'issue') return base + '/issues/' + (seg[4] || '');
+  if (kind === 'pull') return base + '/pull/' + (seg[4] || '');
+  if (kind === 'commit') return base + '/commit/' + (seg[4] || '');
+  if (kind === 'commits') return base + '/commits' + (seg[4] ? '/' + seg[4] : '');
+  if (kind === 'releases') return base + '/releases';
+  if (kind === 'branches') return base + '/branches';
+  return base;
+}
+
+function repoHeader(repo, tab, srcUrl) {
   const o = repo.owner.login, r = repo.name;
+  if (srcUrl === undefined) srcUrl = githubUrlFromRoute();
   const tabs = [
     ['code', '代码', link(o, r)],
     ['issues', 'Issues', link(o, r, 'issues')],
@@ -875,6 +936,7 @@ function repoHeader(repo, tab) {
       <span>${ICON.clock} ${timeAgo(repo.pushed_at)}</span>
       ${repo.homepage ? `<span>${ICON.link}<a href="${esc(repo.homepage)}" target="_blank" rel="noopener">${esc(repo.homepage)}</a></span>` : ''}
     </div>
+    ${srcLink(srcUrl)}
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -2184,6 +2246,7 @@ async function viewUser(login) {
           ${u.blog ? `<span>${ICON.link}<a href="${esc(u.blog)}" target="_blank" rel="noopener">${esc(u.blog)}</a></span>` : ''}
           <span>加入于 ${fmtDate(u.created_at)}</span>
         </div>
+        ${srcLink('https://github.com/' + encodeURIComponent(u.login))}
       </div>
     </div>
     <div class="panel">
@@ -2950,6 +3013,8 @@ async function route() {
     }
   } catch (e) {
     app.innerHTML = errorBox('出错了', e.message);
+  } finally {
+    bindSrcLinks();
   }
 }
 
