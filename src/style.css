@@ -379,7 +379,9 @@ code, pre, .mono {
 main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
 
 .loading-block { display: flex; justify-content: center; padding: 90px 0; }
-.spin-slot { padding: 26px 0; display: flex; justify-content: center; }
+/* 仅在占位阶段居中旋转指示器；内容就位后恢复块级流，
+   否则 .repo-card 等块级子元素会被当成 flex 项横排，撑破面板 */
+.spin-slot:has(> .spinner) { padding: 26px 0; display: flex; justify-content: center; }
 .spinner {
   width: 26px; height: 26px;
   border: 2px solid var(--border);
@@ -1138,9 +1140,9 @@ mark {
 
 /* ---------- 仓库卡片 ---------- */
 
-.repo-card { padding: 13px 16px; border-bottom: 1px solid var(--border-muted); }
+.repo-card { padding: 13px 16px; border-bottom: 1px solid var(--border-muted); min-width: 0; }
 .repo-card:last-child { border-bottom: none; }
-.rc-name { font-size: 15px; font-weight: 500; margin-bottom: 3px; }
+.rc-name { font-size: 15px; font-weight: 500; margin-bottom: 3px; overflow-wrap: anywhere; }
 .rc-name .badge { margin-left: 6px; }
 .rc-desc { color: var(--fg-muted); font-size: 12.5px; margin: 3px 0 8px; }
 .rc-meta { display: flex; gap: 14px; font-size: 12px; color: var(--fg-muted); align-items: center; flex-wrap: wrap; }
@@ -1167,7 +1169,8 @@ mark {
   margin-bottom: 10px;
 }
 
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+/* minmax(0,…)：列宽可收缩到内容最小宽度以下，不被不可压缩内容撑破 */
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
 
 .auth-banner {
   display: flex;
