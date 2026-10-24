@@ -2328,6 +2328,8 @@ let meCache = null;
 function saveToken(t) {
   TOKEN = (t || '').trim();
   meCache = null;
+  // 换了身份，旧缓存可能是另一批可见范围的内容
+  clearCache();
   try {
     if (TOKEN) localStorage.setItem('ghl_token', TOKEN);
     else localStorage.removeItem('ghl_token');
@@ -2500,9 +2502,100 @@ async function fetchVia(ch, path, opts) {
   return res.text();
 }
 
-/** 统一入口：按通道顺序尝试，失败自动降级并记住可用的那条 */
+/* ---------- 本地缓存：命中就不发请求，直接省掉一次配额 ---------- */
+
+const CACHE_PREFIX = 'ghc:';
+const CACHE_MAX = 90;
+const CACHE_MAX_BYTES = 200 * 1024;
+
+/** 不同资源的有效期。目录和代码变化快，给短一点；仓库信息给长一点 */
+function ttlFor(path) {
+  const p = path.split('?')[0];
+  if (p.indexOf('/search/') === 0) return 10 * 60 * 1000;
+  if (p === '/user') return 2 * 60 * 1000;
+  if (p.indexOf('/user/') === 0) return 3 * 60 * 1000;
+  if (p.indexOf('/readme') > 0) return 30 * 60 * 1000;
+  if (p.indexOf('/contents/') > 0) return 5 * 60 * 1000;
+  if (p.indexOf('/releases') > 0) return 15 * 60 * 1000;
+  if (p.indexOf('/branches') > 0) return 15 * 60 * 1000;
+  if (p.indexOf('/commits') > 0) return 5 * 60 * 1000;
+  if (p.indexOf('/issues') > 0 || p.indexOf('/pulls') > 0) return 4 * 60 * 1000;
+  if (p.indexOf('/users/') === 0) return 20 * 60 * 1000;
+  return 8 * 60 * 1000;
+}
+
+function cacheCount() {
+  let n = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(CACHE_PREFIX) === 0) n++;
+    }
+  } catch (_) {}
+  return n;
+}
+
+function clearCache() {
+  try {
+    const drop = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(CACHE_PREFIX) === 0) drop.push(k);
+    }
+    drop.forEach((k) => localStorage.removeItem(k));
+    return drop.length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function cacheGet(path) {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + path);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || typeof rec.t !== 'number') return null;
+    if (Date.now() - rec.t > rec.ttl) {
+      localStorage.removeItem(CACHE_PREFIX + path);
+      return null;
+    }
+    return rec.v;
+  } catch (_) {
+    return null;
+  }
+}
+
+function cacheSet(path, val, ttl) {
+  try {
+    const body = JSON.stringify({ t: Date.now(), ttl: ttl, v: val });
+    if (body.length > CACHE_MAX_BYTES) return;
+    if (cacheCount() >= CACHE_MAX) clearCache();
+    localStorage.setItem(CACHE_PREFIX + path, body);
+  } catch (_) {
+    // 配额满或被禁用就静默放弃，不影响功能
+  }
+}
+
+/** 统一入口：缓存优先，未命中再走通道降级 */
 async function gh(path, opts) {
   opts = opts || {};
+
+  // 二进制、纯文本、显式禁用的不走缓存
+  const cacheable = !opts.blob && !opts.text && opts.cache !== false;
+  const ttl = cacheable ? ttlFor(path) : 0;
+
+  if (cacheable) {
+    const hit = cacheGet(path);
+    if (hit !== null) return hit;
+  }
+
+  const out = await ghFetch(path, opts);
+  if (cacheable && out !== null && typeof out === 'object') cacheSet(path, out, ttl);
+  return out;
+}
+
+/** 真正的请求：按通道顺序尝试，失败自动降级并记住可用的那条 */
+async function ghFetch(path, opts) {
   await ensureChannels();
 
   let lastErr = null;
@@ -3811,6 +3904,19 @@ async function openSettings() {
       </div>
 
       <div class="set-block">
+        <h4>本地缓存</h4>
+        <p class="hint" style="margin-bottom:8px">
+          浏览过的内容留在本机。有效期内再次访问不会请求 GitHub，因此不消耗配额。
+          仓库信息 8 分钟、文件与目录 5 分钟、README 30 分钟、搜索 10 分钟。
+        </p>
+        <div class="modal-actions" style="margin-top:0">
+          <span class="dim" id="cacheInfo" style="font-size:12px"></span>
+          <span class="spacer"></span>
+          <button class="btn sm ghost" id="cacheClear">清空缓存</button>
+        </div>
+      </div>
+
+      <div class="set-block">
         <h4>当前通路</h4>
         ${chRows}
         <div class="modal-actions">
@@ -3829,6 +3935,21 @@ async function openSettings() {
   const close = () => { mask.hidden = true; mask.innerHTML = ''; };
   $('#tkCancel').addEventListener('click', close);
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+
+  const refreshCacheInfo = () => {
+    const el = $('#cacheInfo');
+    if (el) {
+      const n = cacheCount();
+      el.textContent = n ? '已缓存 ' + n + ' 项' : '暂无缓存';
+    }
+  };
+  refreshCacheInfo();
+
+  $('#cacheClear').addEventListener('click', () => {
+    const n = clearCache();
+    refreshCacheInfo();
+    toast(n ? '已清空 ' + n + ' 项缓存' : '缓存本来就是空的');
+  });
 
   $('#tkClear').addEventListener('click', () => {
     saveToken('');
