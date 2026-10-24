@@ -873,6 +873,38 @@ function bindSrcLinks(scope) {
   });
 }
 
+/* ---------------------------- 访问计数 ---------------------------- */
+
+/**
+ * 计数端点。默认留空，即完全不上报；
+ * 部署 stats-worker.js 后把地址填在这里，或以 ghl_stats 存入 localStorage 覆盖。
+ * 端点只累计数字，不记录 IP、User-Agent 或任何标识。
+ */
+const STATS_BASE = '';
+
+function statsBase() {
+  const v = String(LS.get('ghl_stats', '') || '').trim();
+  return (v || STATS_BASE).replace(/\/+$/, '');
+}
+
+function reportUsage(kind) {
+  const base = statsBase();
+  if (!base) return;
+  try {
+    fetch(base + '/hit?k=' + encodeURIComponent(kind || 'view'), { mode: 'cors' });
+  } catch (_) {}
+}
+
+/** 每次打开页面记一次 view；同一浏览器只记一次 unique */
+function reportVisit() {
+  const base = statsBase();
+  if (!base) return;
+  reportUsage('view');
+  if (LS.get('ghc_seen', '')) return;
+  LS.set('ghc_seen', '1');
+  reportUsage('unique');
+}
+
 /** 由当前路由推导出对应的 GitHub 原地址 */
 function githubUrlFromRoute() {
   let seg, q;
@@ -1531,6 +1563,7 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       showing = true;
       paint(out);
       toast('已译为中文');
+      reportUsage('translate');
     } catch (e) {
       toast('翻译失败：' + e.message + '。可在设置里填自建 LibreTranslate 地址', 6000);
     } finally {
@@ -1637,6 +1670,7 @@ async function viewRepo(o, r) {
     return;
   }
   document.title = o + '/' + r;
+  reportUsage('repo');
 
   const ref = repo.default_branch;
   const ctx = {
@@ -2512,6 +2546,7 @@ async function viewSearch(q, type, params) {
 
   document.title = q + ' · 搜索';
   loading();
+  reportUsage('search');
 
   const query = composeSearchQuery(q, type, f);
   const per = 30;
@@ -4094,5 +4129,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#ch').addEventListener('click', openSettings);
   if (!location.hash) location.hash = '#/';
   route();
+  reportVisit();
   ensureChannels();
 });
