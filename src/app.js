@@ -1104,14 +1104,73 @@ async function libreTranslate(text) {
   return j.translatedText;
 }
 
-/** 单批翻译，按可用性挑通道 */
-async function translateChunk(text) {
+/** 腾讯翻译：无需密钥，支持批量，单次可处理数千字符 */
+async function tencentTranslate(list) {
+  const res = await fetch('https://transmart.qq.com/api/imt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      header: { fn: 'auto_translation', client_key: 'browser-chrome-110.0.0-Mac OS' },
+      type: 'plain',
+      model_category: 'normal',
+      source: { lang: 'en', text_list: list },
+      target: { lang: 'zh' }
+    })
+  });
+  if (!res.ok) throw new Error('腾讯翻译 HTTP ' + res.status);
+  const j = await res.json();
+  if (j && j.header && j.header.ret_code !== 'succ') {
+    throw new Error('腾讯翻译：' + (j.message || j.header.ret_code));
+  }
+  const out = (j && j.auto_translation) || [];
+  if (!Array.isArray(out) || out.length !== list.length) {
+    throw new Error('腾讯翻译返回条数不符');
+  }
+  return out;
+}
+
+/** MyMemory 单次上限 500 字符，超长先按句切开 */
+async function myMemoryLong(s) {
+  if (s.length <= 460) return myMemoryTranslate(s);
+  const segs = splitSentences(s, 460);
+  const parts = [];
+  for (const seg of segs) parts.push(await myMemoryTranslate(seg));
+  return parts.join('');
+}
+
+let lastTrErr = null;
+
+/** 批量翻译，返回与 items 等长的数组，失败位置为 null */
+async function translateBatch(items) {
   const bt = await getBrowserTranslator();
   if (bt) {
-    try { return await bt.translate(text); } catch (_) {}
+    const out = [];
+    for (const s of items) {
+      try { out.push(await bt.translate(s)); }
+      catch (e) { lastTrErr = e; out.push(null); }
+    }
+    return out;
   }
-  try { return await libreTranslate(text); } catch (_) {}
-  return myMemoryTranslate(text);
+
+  lastTrErr = null;
+  try {
+    return await tencentTranslate(items);
+  } catch (e) {
+    lastTrErr = e;
+  }
+
+  const out = [];
+  for (const s of items) {
+    let r = null;
+    try {
+      r = await libreTranslate(s);
+    } catch (e) {
+      lastTrErr = e;
+      try { r = await myMemoryLong(s); } catch (e2) { lastTrErr = e2; }
+    }
+    out.push(r);
+  }
+  return out;
 }
 
 /* ---------- 行内受保护片段 ---------- */
@@ -1171,7 +1230,7 @@ function splitSentences(text, max) {
  */
 async function translateBlock(text, onTick) {
   const bt = await getBrowserTranslator();
-  const limit = bt ? 1800 : 380;
+  const maxChars = bt ? 1600 : 1200;
 
   const lines = text.split('\n');
   const jobs = [];
@@ -1181,79 +1240,70 @@ async function translateBlock(text, onTick) {
     if (!body.trim()) return;
     const g = protectInline(body);
     if (!g.text.trim()) return;
-    jobs.push({ idx: i, prefix: prefix, guarded: g.text, map: g.map, len: g.text.length });
+    jobs.push({ idx: i, prefix: prefix, guarded: g.text, map: g.map });
   });
   if (!jobs.length) return text;
 
+  // 超长行按句切成多条；切出的片段共用同一行的前缀与占位符表
+  const units = [];
+  jobs.forEach((j) => {
+    const segs = splitSentences(j.guarded, maxChars);
+    segs.forEach((s, k) => {
+      units.push({ job: j, text: s, first: k === 0 });
+    });
+  });
+
   const out = lines.slice();
-  const total = jobs.length;
-  let done = 0;
-  let okCount = 0;
-  let lastErr = null;
+  const idxOf = new Map();
+  jobs.forEach((j) => idxOf.set(j.idx, j));
+  const bufs = new Map();
+  let ok = 0;
 
-  const shortOnes = jobs.filter((j) => j.len <= limit);
-  const longOnes = jobs.filter((j) => j.len > limit);
-
+  // 合批：字符数与条数双限
   const batches = [];
   let cur = [];
   let len = 0;
-  shortOnes.forEach((j) => {
-    const add = j.len + 1;
-    if (cur.length && len + add > limit) { batches.push(cur); cur = []; len = 0; }
-    cur.push(j);
+  units.forEach((u) => {
+    const add = u.text.length + 2;
+    if (cur.length && (len + add > maxChars || cur.length >= 8)) {
+      batches.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(u);
     len += add;
   });
   if (cur.length) batches.push(cur);
 
+  let done = 0;
   for (const batch of batches) {
-    const joined = batch.map((j) => j.guarded).join('\n');
-    let translated = null;
-    try {
-      translated = await translateChunk(joined);
-    } catch (e) {
-      lastErr = e;
-      translated = null;
-    }
-
-    if (translated) {
-      const parts = translated.split('\n');
-      if (parts.length === batch.length) {
-        batch.forEach((j, k) => {
-          out[j.idx] = j.prefix + restoreInline(parts[k], j.map);
-        });
-        okCount += batch.length;
-      }
-      // 行数对不上时保留原文，宁可未译也不错位或丢内容
-    }
-
+    const res = await translateBatch(batch.map((u) => u.text));
+    batch.forEach((u, k) => {
+      const t = res[k];
+      if (t === null || t === undefined || !String(t).trim()) return;
+      const key = u.job.idx;
+      if (!bufs.has(key)) bufs.set(key, []);
+      bufs.get(key).push({ first: u.first, text: t });
+      ok++;
+    });
     done += batch.length;
-    if (onTick) onTick(done, total);
+    if (onTick) onTick(done, units.length);
   }
 
-  // 超长段落：按句子切开逐句翻译，再拼回整行
-  for (const j of longOnes) {
-    const segs = splitSentences(j.guarded, limit);
-    const pieces = [];
-    let hit = false;
-    for (const s of segs) {
-      let r = null;
-      try { r = await translateChunk(s); } catch (e) { lastErr = e; }
-      if (r !== null) hit = true;
-      pieces.push(r === null ? s : r);
-    }
-    if (hit) {
-      out[j.idx] = j.prefix + restoreInline(pieces.join(''), j.map);
-      okCount++;
-    }
-    done++;
-    if (onTick) onTick(done, total);
-  }
+  bufs.forEach((arr, idx) => {
+    const job = idxOf.get(idx);
+    let s = '';
+    arr.forEach((piece) => {
+      if (piece.first) s += job.prefix;
+      s += piece.text;
+    });
+    out[idx] = restoreInline(s, job.map);
+  });
 
-  // 一行都没译成，视为整体失败，交由上层提示
-  if (!okCount) throw (lastErr || new Error('翻译接口未返回结果'));
-
+  if (!ok) throw (lastTrErr || new Error('翻译接口未返回结果'));
   return out.join('\n');
 }
+
 
 async function translateMarkdown(md, onTick) {
   const parts = splitMd(md);
