@@ -14,23 +14,25 @@
    ============================================================ */
 
 :root[data-theme="dark"] {
+  /* 取自 @primer/primitives（GitHub 官方设计 token，MIT） */
   --bg: #0d1117;
-  --bg-subtle: #161b22;
+  --bg-subtle: #151b23;
   --bg-inset: #010409;
-  --bg-hover: #1c2128;
-  --border: #30363d;
-  --border-muted: #21262d;
-  --fg: #e6edf3;
-  --fg-muted: #8b949e;
-  --fg-subtle: #6e7681;
-  --accent: #2f81f7;
-  --accent-hover: #58a6ff;
+  --bg-hover: #1f242c;
+  --border: #3d444d;
+  --border-muted: #3d444db3;
+  --fg: #f0f6fc;
+  --fg-muted: #9198a1;
+  --fg-subtle: #656c76;
+  --accent: #4493f8;
+  --accent-hover: #79b8ff;
   --green: #3fb950;
   --red: #f85149;
-  --purple: #bc8cff;
+  --purple: #ab7df8;
   --yellow: #d29922;
+  --focus: #1f6feb;
   --shadow: 0 8px 28px rgba(1, 4, 9, .65);
-  --code-bg: #161b22;
+  --code-bg: #151b23;
   --tab-line: #f78166;
 }
 
@@ -38,18 +40,19 @@
   --bg: #ffffff;
   --bg-subtle: #f6f8fa;
   --bg-inset: #f6f8fa;
-  --bg-hover: #f3f4f6;
+  --bg-hover: #eef1f4;
   --border: #d1d9e0;
-  --border-muted: #e7ecf0;
+  --border-muted: #d1d9e0b3;
   --fg: #1f2328;
   --fg-muted: #59636e;
-  --fg-subtle: #818b98;
+  --fg-subtle: #6e7781;
   --accent: #0969da;
-  --accent-hover: #0250c4;
+  --accent-hover: #0550ae;
   --green: #1a7f37;
   --red: #cf222e;
   --purple: #8250df;
   --yellow: #9a6700;
+  --focus: #0969da;
   --shadow: 0 8px 28px rgba(31, 35, 40, .14);
   --code-bg: #f6f8fa;
   --tab-line: #fd8c73;
@@ -647,6 +650,73 @@ mark {
 .panel-head .path-crumb { color: var(--fg); font-size: 12.5px; word-break: break-all; }
 .panel-head .path-crumb a { color: var(--fg); }
 .panel-head .path-crumb b { font-weight: 600; }
+
+/* ---------- 仓库页双栏（主内容 + 关于） ---------- */
+
+.repo-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 288px;
+  gap: 24px;
+  align-items: start;
+}
+.repo-main { min-width: 0; }
+.repo-side { position: sticky; top: 72px; }
+
+.about-panel .panel-head { color: var(--fg); font-weight: 600; }
+.about-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.about-desc { margin: 0; color: var(--fg); line-height: 1.55; }
+.about-link { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.about-link a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about-row { color: var(--fg-muted); font-size: 12.5px; line-height: 1.6; }
+.about-stats { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--fg-muted); }
+.about-stats span { display: inline-flex; align-items: center; gap: 6px; }
+.about-stats b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.about-warn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 40%, transparent);
+  color: var(--yellow);
+}
+
+.topics { display: flex; flex-wrap: wrap; gap: 6px; }
+.topic {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 11.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.topic:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); text-decoration: none; }
+
+.lang-box { display: flex; flex-direction: column; gap: 9px; }
+.lang-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+}
+.lang-bar span { display: block; height: 100%; }
+.lang-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--fg-muted); }
+.lg { display: inline-flex; align-items: center; gap: 5px; }
+.lg i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.lg b { color: var(--fg); font-weight: 500; }
+
+@media (max-width: 980px) {
+  .repo-layout { grid-template-columns: 1fr; }
+  .repo-side { position: static; }
+  .about-stats { flex-direction: row; flex-wrap: wrap; gap: 16px; }
+}
 
 .commit-bar .panel-head { min-height: 38px; }
 .commit-bar .ellipsis { min-width: 0; flex: 1; }
@@ -3342,15 +3412,95 @@ function bindAuthBanner() {
 
 /* ---------------------------- 仓库概览 ---------------------------- */
 
+/* 语言配色沿用 GitHub linguist 的习惯用色 */
+const LANG_COLORS = {
+  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
+  Go: '#00ADD8', Rust: '#dea584', C: '#555555', 'C++': '#f34b7d', 'C#': '#178600',
+  PHP: '#4F5D95', Ruby: '#701516', Swift: '#F05138', Kotlin: '#A97BFF',
+  Dart: '#00B4AB', Shell: '#89e051', HTML: '#e34c26', CSS: '#563d7c',
+  Vue: '#41b883', SCSS: '#c6538c', Lua: '#000080', R: '#198CE7',
+  'Jupyter Notebook': '#DA5B0B', Dockerfile: '#384d54', Makefile: '#427819',
+  CMake: '#DA3434', 'Objective-C': '#438eff', Haskell: '#5e5086', Elixir: '#6e4a7e',
+  Scala: '#c22d40', Perl: '#0298c3', Assembly: '#6E4C13', TeX: '#3D6117',
+  PowerShell: '#012456', 'Vim Script': '#199f4b', Nix: '#7e7eff'
+};
+
+/** 语言占比条，照 GitHub 仓库页右栏的样子做 */
+function langBar(langs) {
+  const entries = Object.keys(langs || {})
+    .map((k) => [k, langs[k]])
+    .filter((e) => e[1] > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  if (!total) return '';
+
+  const top = entries.slice(0, 6);
+  const color = (n) => LANG_COLORS[n] || 'var(--fg-subtle)';
+
+  const segs = top.map(([n, v]) =>
+    '<span style="width:' + (v / total * 100).toFixed(2) + '%;background:' + color(n) +
+    '" title="' + esc(n) + ' ' + (v / total * 100).toFixed(1) + '%"></span>').join('');
+
+  const legend = top.map(([n, v]) =>
+    '<span class="lg"><i style="background:' + color(n) + '"></i><b>' + esc(n) + '</b> ' +
+    (v / total * 100).toFixed(1) + '%</span>').join('');
+
+  return '<div class="lang-box">' +
+    '<div class="lang-bar">' + segs + '</div>' +
+    '<div class="lang-legend">' + legend + '</div>' +
+    '</div>';
+}
+
+/** 右侧「关于」栏 */
+function aboutPanel(repo, langs) {
+  const rows = [];
+
+  if (repo.archived) rows.push('<div class="about-warn">此仓库已归档，只读</div>');
+  if (repo.description) rows.push('<p class="about-desc">' + esc(repo.description) + '</p>');
+
+  if (repo.homepage) {
+    rows.push('<div class="about-link">' + ICON.link +
+      '<a href="' + esc(repo.homepage) + '" target="_blank" rel="noopener">' +
+      esc(String(repo.homepage).replace(/^https?:\/\//, '')) + '</a></div>');
+  }
+
+  if (repo.topics && repo.topics.length) {
+    rows.push('<div class="topics">' + repo.topics.slice(0, 12).map((t) =>
+      '<a class="topic" href="#/search?q=' + encodeURIComponent('topic:' + t) +
+      '&type=repositories">' + esc(t) + '</a>').join('') + '</div>');
+  }
+
+  const bar = langs ? langBar(langs) : '';
+  if (bar) rows.push(bar);
+
+  rows.push('<div class="about-stats">' +
+    '<span>' + ICON.star + '<b>' + fmtNum(repo.stargazers_count) + '</b> stars</span>' +
+    '<span>' + ICON.eye + '<b>' + fmtNum(repo.subscribers_count || repo.watchers_count) + '</b> watching</span>' +
+    '<span>' + ICON.fork + '<b>' + fmtNum(repo.forks_count) + '</b> forks</span>' +
+    '</div>');
+
+  const facts = [];
+  if (repo.license) facts.push(esc(repo.license.spdx_id || repo.license.name) + ' 许可');
+  if (repo.fork && repo.parent) facts.push('Fork 自 ' + esc(repo.parent.full_name));
+  facts.push('更新于 ' + timeAgo(repo.pushed_at));
+  rows.push('<div class="about-row">' + facts.join(' · ') + '</div>');
+
+  return '<div class="panel about-panel">' +
+    '<div class="panel-head">关于</div>' +
+    '<div class="about-body">' + rows.join('') + '</div>' +
+    '</div>';
+}
+
 async function viewRepo(o, r) {
   loading();
-  let repo, contents, readme, commit;
+  let repo, contents, readme, commit, langs;
   try {
     repo = await getRepo(o, r);
-    [contents, readme, commit] = await Promise.all([
+    [contents, readme, commit, langs] = await Promise.all([
       gh('/repos/' + o + '/' + r + '/contents/').catch(() => []),
       gh('/repos/' + o + '/' + r + '/readme').catch(() => null),
-      gh('/repos/' + o + '/' + r + '/commits?per_page=1').catch(() => null)
+      gh('/repos/' + o + '/' + r + '/commits?per_page=1').catch(() => null),
+      gh('/repos/' + o + '/' + r + '/languages').catch(() => null)
     ]);
   } catch (e) {
     app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取仓库', e.message);
@@ -3388,16 +3538,22 @@ async function viewRepo(o, r) {
     </div>` : '';
 
   app.innerHTML = repoHeader(repo, 'code') + commitBar + `
-    <div class="panel">
-      <div class="panel-head">
-        <a class="btn sm ghost" href="${link(o, r, 'branches')}">${ICON.branch} ${esc(ref)}</a>
-        <span class="spacer"></span>
-        <a class="btn sm" href="${link(o, r, 'tools', ref)}">${ICON.download} 下载</a>
+    <div class="repo-layout">
+      <div class="repo-main">
+        <div class="panel">
+          <div class="panel-head">
+            <a class="btn sm ghost" href="${link(o, r, 'branches')}">${ICON.branch} ${esc(ref)}</a>
+            <span class="spacer"></span>
+            <a class="btn sm" href="${link(o, r, 'tools', ref)}">${ICON.download} 下载</a>
+          </div>
+          ${contents.length
+            ? contents.map(c => fileRow(o, r, ref, c)).join('')
+            : '<div class="empty">这是一个空仓库</div>'}
+        </div>
+        ${readmeHtml}
       </div>
-      ${contents.length
-        ? contents.map(c => fileRow(o, r, ref, c)).join('')
-        : '<div class="empty">这是一个空仓库</div>'}
-    </div>` + readmeHtml;
+      <aside class="repo-side">${aboutPanel(repo, langs)}</aside>
+    </div>`;
 
   bindFileRows();
 }

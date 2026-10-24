@@ -987,15 +987,95 @@ function bindAuthBanner() {
 
 /* ---------------------------- 仓库概览 ---------------------------- */
 
+/* 语言配色沿用 GitHub linguist 的习惯用色 */
+const LANG_COLORS = {
+  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Java: '#b07219',
+  Go: '#00ADD8', Rust: '#dea584', C: '#555555', 'C++': '#f34b7d', 'C#': '#178600',
+  PHP: '#4F5D95', Ruby: '#701516', Swift: '#F05138', Kotlin: '#A97BFF',
+  Dart: '#00B4AB', Shell: '#89e051', HTML: '#e34c26', CSS: '#563d7c',
+  Vue: '#41b883', SCSS: '#c6538c', Lua: '#000080', R: '#198CE7',
+  'Jupyter Notebook': '#DA5B0B', Dockerfile: '#384d54', Makefile: '#427819',
+  CMake: '#DA3434', 'Objective-C': '#438eff', Haskell: '#5e5086', Elixir: '#6e4a7e',
+  Scala: '#c22d40', Perl: '#0298c3', Assembly: '#6E4C13', TeX: '#3D6117',
+  PowerShell: '#012456', 'Vim Script': '#199f4b', Nix: '#7e7eff'
+};
+
+/** 语言占比条，照 GitHub 仓库页右栏的样子做 */
+function langBar(langs) {
+  const entries = Object.keys(langs || {})
+    .map((k) => [k, langs[k]])
+    .filter((e) => e[1] > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((s, e) => s + e[1], 0);
+  if (!total) return '';
+
+  const top = entries.slice(0, 6);
+  const color = (n) => LANG_COLORS[n] || 'var(--fg-subtle)';
+
+  const segs = top.map(([n, v]) =>
+    '<span style="width:' + (v / total * 100).toFixed(2) + '%;background:' + color(n) +
+    '" title="' + esc(n) + ' ' + (v / total * 100).toFixed(1) + '%"></span>').join('');
+
+  const legend = top.map(([n, v]) =>
+    '<span class="lg"><i style="background:' + color(n) + '"></i><b>' + esc(n) + '</b> ' +
+    (v / total * 100).toFixed(1) + '%</span>').join('');
+
+  return '<div class="lang-box">' +
+    '<div class="lang-bar">' + segs + '</div>' +
+    '<div class="lang-legend">' + legend + '</div>' +
+    '</div>';
+}
+
+/** 右侧「关于」栏 */
+function aboutPanel(repo, langs) {
+  const rows = [];
+
+  if (repo.archived) rows.push('<div class="about-warn">此仓库已归档，只读</div>');
+  if (repo.description) rows.push('<p class="about-desc">' + esc(repo.description) + '</p>');
+
+  if (repo.homepage) {
+    rows.push('<div class="about-link">' + ICON.link +
+      '<a href="' + esc(repo.homepage) + '" target="_blank" rel="noopener">' +
+      esc(String(repo.homepage).replace(/^https?:\/\//, '')) + '</a></div>');
+  }
+
+  if (repo.topics && repo.topics.length) {
+    rows.push('<div class="topics">' + repo.topics.slice(0, 12).map((t) =>
+      '<a class="topic" href="#/search?q=' + encodeURIComponent('topic:' + t) +
+      '&type=repositories">' + esc(t) + '</a>').join('') + '</div>');
+  }
+
+  const bar = langs ? langBar(langs) : '';
+  if (bar) rows.push(bar);
+
+  rows.push('<div class="about-stats">' +
+    '<span>' + ICON.star + '<b>' + fmtNum(repo.stargazers_count) + '</b> stars</span>' +
+    '<span>' + ICON.eye + '<b>' + fmtNum(repo.subscribers_count || repo.watchers_count) + '</b> watching</span>' +
+    '<span>' + ICON.fork + '<b>' + fmtNum(repo.forks_count) + '</b> forks</span>' +
+    '</div>');
+
+  const facts = [];
+  if (repo.license) facts.push(esc(repo.license.spdx_id || repo.license.name) + ' 许可');
+  if (repo.fork && repo.parent) facts.push('Fork 自 ' + esc(repo.parent.full_name));
+  facts.push('更新于 ' + timeAgo(repo.pushed_at));
+  rows.push('<div class="about-row">' + facts.join(' · ') + '</div>');
+
+  return '<div class="panel about-panel">' +
+    '<div class="panel-head">关于</div>' +
+    '<div class="about-body">' + rows.join('') + '</div>' +
+    '</div>';
+}
+
 async function viewRepo(o, r) {
   loading();
-  let repo, contents, readme, commit;
+  let repo, contents, readme, commit, langs;
   try {
     repo = await getRepo(o, r);
-    [contents, readme, commit] = await Promise.all([
+    [contents, readme, commit, langs] = await Promise.all([
       gh('/repos/' + o + '/' + r + '/contents/').catch(() => []),
       gh('/repos/' + o + '/' + r + '/readme').catch(() => null),
-      gh('/repos/' + o + '/' + r + '/commits?per_page=1').catch(() => null)
+      gh('/repos/' + o + '/' + r + '/commits?per_page=1').catch(() => null),
+      gh('/repos/' + o + '/' + r + '/languages').catch(() => null)
     ]);
   } catch (e) {
     app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取仓库', e.message);
@@ -1033,16 +1113,22 @@ async function viewRepo(o, r) {
     </div>` : '';
 
   app.innerHTML = repoHeader(repo, 'code') + commitBar + `
-    <div class="panel">
-      <div class="panel-head">
-        <a class="btn sm ghost" href="${link(o, r, 'branches')}">${ICON.branch} ${esc(ref)}</a>
-        <span class="spacer"></span>
-        <a class="btn sm" href="${link(o, r, 'tools', ref)}">${ICON.download} 下载</a>
+    <div class="repo-layout">
+      <div class="repo-main">
+        <div class="panel">
+          <div class="panel-head">
+            <a class="btn sm ghost" href="${link(o, r, 'branches')}">${ICON.branch} ${esc(ref)}</a>
+            <span class="spacer"></span>
+            <a class="btn sm" href="${link(o, r, 'tools', ref)}">${ICON.download} 下载</a>
+          </div>
+          ${contents.length
+            ? contents.map(c => fileRow(o, r, ref, c)).join('')
+            : '<div class="empty">这是一个空仓库</div>'}
+        </div>
+        ${readmeHtml}
       </div>
-      ${contents.length
-        ? contents.map(c => fileRow(o, r, ref, c)).join('')
-        : '<div class="empty">这是一个空仓库</div>'}
-    </div>` + readmeHtml;
+      <aside class="repo-side">${aboutPanel(repo, langs)}</aside>
+    </div>`;
 
   bindFileRows();
 }

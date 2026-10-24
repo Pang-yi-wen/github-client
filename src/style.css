@@ -3,23 +3,25 @@
    ============================================================ */
 
 :root[data-theme="dark"] {
+  /* 取自 @primer/primitives（GitHub 官方设计 token，MIT） */
   --bg: #0d1117;
-  --bg-subtle: #161b22;
+  --bg-subtle: #151b23;
   --bg-inset: #010409;
-  --bg-hover: #1c2128;
-  --border: #30363d;
-  --border-muted: #21262d;
-  --fg: #e6edf3;
-  --fg-muted: #8b949e;
-  --fg-subtle: #6e7681;
-  --accent: #2f81f7;
-  --accent-hover: #58a6ff;
+  --bg-hover: #1f242c;
+  --border: #3d444d;
+  --border-muted: #3d444db3;
+  --fg: #f0f6fc;
+  --fg-muted: #9198a1;
+  --fg-subtle: #656c76;
+  --accent: #4493f8;
+  --accent-hover: #79b8ff;
   --green: #3fb950;
   --red: #f85149;
-  --purple: #bc8cff;
+  --purple: #ab7df8;
   --yellow: #d29922;
+  --focus: #1f6feb;
   --shadow: 0 8px 28px rgba(1, 4, 9, .65);
-  --code-bg: #161b22;
+  --code-bg: #151b23;
   --tab-line: #f78166;
 }
 
@@ -27,18 +29,19 @@
   --bg: #ffffff;
   --bg-subtle: #f6f8fa;
   --bg-inset: #f6f8fa;
-  --bg-hover: #f3f4f6;
+  --bg-hover: #eef1f4;
   --border: #d1d9e0;
-  --border-muted: #e7ecf0;
+  --border-muted: #d1d9e0b3;
   --fg: #1f2328;
   --fg-muted: #59636e;
-  --fg-subtle: #818b98;
+  --fg-subtle: #6e7781;
   --accent: #0969da;
-  --accent-hover: #0250c4;
+  --accent-hover: #0550ae;
   --green: #1a7f37;
   --red: #cf222e;
   --purple: #8250df;
   --yellow: #9a6700;
+  --focus: #0969da;
   --shadow: 0 8px 28px rgba(31, 35, 40, .14);
   --code-bg: #f6f8fa;
   --tab-line: #fd8c73;
@@ -636,6 +639,73 @@ mark {
 .panel-head .path-crumb { color: var(--fg); font-size: 12.5px; word-break: break-all; }
 .panel-head .path-crumb a { color: var(--fg); }
 .panel-head .path-crumb b { font-weight: 600; }
+
+/* ---------- 仓库页双栏（主内容 + 关于） ---------- */
+
+.repo-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 288px;
+  gap: 24px;
+  align-items: start;
+}
+.repo-main { min-width: 0; }
+.repo-side { position: sticky; top: 72px; }
+
+.about-panel .panel-head { color: var(--fg); font-weight: 600; }
+.about-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.about-desc { margin: 0; color: var(--fg); line-height: 1.55; }
+.about-link { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.about-link a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about-row { color: var(--fg-muted); font-size: 12.5px; line-height: 1.6; }
+.about-stats { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--fg-muted); }
+.about-stats span { display: inline-flex; align-items: center; gap: 6px; }
+.about-stats b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.about-warn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--yellow) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--yellow) 40%, transparent);
+  color: var(--yellow);
+}
+
+.topics { display: flex; flex-wrap: wrap; gap: 6px; }
+.topic {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 11.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.topic:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); text-decoration: none; }
+
+.lang-box { display: flex; flex-direction: column; gap: 9px; }
+.lang-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+}
+.lang-bar span { display: block; height: 100%; }
+.lang-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--fg-muted); }
+.lg { display: inline-flex; align-items: center; gap: 5px; }
+.lg i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.lg b { color: var(--fg); font-weight: 500; }
+
+@media (max-width: 980px) {
+  .repo-layout { grid-template-columns: 1fr; }
+  .repo-side { position: static; }
+  .about-stats { flex-direction: row; flex-wrap: wrap; gap: 16px; }
+}
 
 .commit-bar .panel-head { min-height: 38px; }
 .commit-bar .ellipsis { min-width: 0; flex: 1; }

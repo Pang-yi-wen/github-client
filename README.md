@@ -4,6 +4,8 @@
 
 不抓取网页，只调官方 REST API，因此不受前端改版影响；API 不通时自动换通路。
 
+界面色板取自 GitHub 官方的设计系统 [Primer](https://primer.style)（`@primer/primitives`，MIT 许可）里的 dark / light token，非照着截图取色。
+
 ## 通路
 
 请求按顺序尝试，任一失败切下一条：
