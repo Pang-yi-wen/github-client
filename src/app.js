@@ -1072,11 +1072,20 @@ async function myMemoryTranslate(text) {
   const url = 'https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=' +
     encodeURIComponent(text.slice(0, 480));
   const res = await fetch(url);
+  if (res.status === 429) throw new Error('MyMemory 触发限流或当日额度已用尽');
   if (!res.ok) throw new Error('MyMemory HTTP ' + res.status);
   const j = await res.json();
   const out = j && j.responseData && j.responseData.translatedText;
-  if (!out) throw new Error('MyMemory 无结果');
-  if (/MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(out)) throw new Error(out);
+  if (!out) throw new Error('MyMemory 无返回');
+
+  if (/MYMEMORY WARNING/i.test(out)) {
+    if (/USED ALL AVAILABLE FREE TRANSLATIONS/i.test(out)) {
+      const m = out.match(/NEXT AVAILABLE IN\s+([0-9]+\s+HOURS?[^.]*)/i);
+      throw new Error('MyMemory 免费额度已用尽' + (m ? '，约 ' + m[1].replace(/\s+/g, ' ').trim() + ' 后恢复' : ''));
+    }
+    throw new Error('MyMemory 返回警告：' + out.slice(0, 80));
+  }
+  if (/QUERY LENGTH LIMIT/i.test(out)) throw new Error('文本超过 MyMemory 单次上限');
   return out;
 }
 
@@ -1105,56 +1114,143 @@ async function translateChunk(text) {
   return myMemoryTranslate(text);
 }
 
-/** 把一段 markdown 文本逐段翻译，尽量保住结构 */
-async function translateBlock(text, onTick) {
-  const lines = text.split('\n');
-  const jobs = [];     // { idx, prefix, body }
+/* ---------- 行内受保护片段 ---------- */
 
+/** 行内代码、链接、图片不参与翻译，先换成占位符 */
+function protectInline(s) {
+  const map = [];
+  const text = String(s).replace(
+    /`[^`\n]+`|https?:\/\/[^\s)\]}>,，。"']+|!\[[^\]]*\]\([^)]*\)/g,
+    (m) => {
+      let body = m;
+      let tail = '';
+      // URL 末尾的标点要留在占位符外面，否则会吃掉句子边界
+      if (/^https?:/i.test(m)) {
+        const t = m.match(/[.,;:!?]+$/);
+        if (t) { tail = t[0]; body = m.slice(0, -tail.length); }
+      }
+      map.push(body);
+      return '[[' + (map.length - 1) + ']]' + tail;
+    }
+  );
+  return { text: text, map: map };
+}
+
+function restoreInline(s, map) {
+  if (!map || !map.length) return s;
+  return String(s).replace(/\[\[\s*(\d+)\s*\]\]/g, (m, i) => {
+    const v = map[Number(i)];
+    return v === undefined ? m : v;
+  });
+}
+
+/** 按句末标点切分；单句仍超限的再硬切 */
+function splitSentences(text, max) {
+  if (text.length <= max) return [text];
+  const segs = text.split(/(?<=[.!?。！？])\s+/);
+  const out = [];
+  let cur = '';
+  for (const seg of segs) {
+    if (cur && (cur + ' ' + seg).length > max) { out.push(cur); cur = seg; }
+    else cur = cur ? cur + ' ' + seg : seg;
+  }
+  if (cur) out.push(cur);
+
+  const final = [];
+  for (const p of out) {
+    if (p.length <= max) { final.push(p); continue; }
+    for (let i = 0; i < p.length; i += max) final.push(p.slice(i, i + max));
+  }
+  return final;
+}
+
+/**
+ * 逐行翻译一段 markdown。
+ * 批次上限随通道变化：浏览器内置模型给到 1800 字符，MyMemory 只有 500，
+ * 因此短行合批；超长段落按句子切开单独翻译，避免被接口截断。
+ */
+async function translateBlock(text, onTick) {
+  const bt = await getBrowserTranslator();
+  const limit = bt ? 1800 : 380;
+
+  const lines = text.split('\n');
+  const jobs = [];
   lines.forEach((line, i) => {
     if (skipLine(line)) return;
     const [prefix, body] = splitLinePrefix(line);
     if (!body.trim()) return;
-    jobs.push({ idx: i, prefix: prefix, body: body });
+    const g = protectInline(body);
+    if (!g.text.trim()) return;
+    jobs.push({ idx: i, prefix: prefix, guarded: g.text, map: g.map, len: g.text.length });
   });
-
   if (!jobs.length) return text;
 
-  // 合批，控制在 400 字符以内，减少请求次数
+  const out = lines.slice();
+  const total = jobs.length;
+  let done = 0;
+  let okCount = 0;
+  let lastErr = null;
+
+  const shortOnes = jobs.filter((j) => j.len <= limit);
+  const longOnes = jobs.filter((j) => j.len > limit);
+
   const batches = [];
   let cur = [];
   let len = 0;
-  jobs.forEach((j) => {
-    const add = j.body.length + 1;
-    if (cur.length && len + add > 400) { batches.push(cur); cur = []; len = 0; }
+  shortOnes.forEach((j) => {
+    const add = j.len + 1;
+    if (cur.length && len + add > limit) { batches.push(cur); cur = []; len = 0; }
     cur.push(j);
     len += add;
   });
   if (cur.length) batches.push(cur);
 
-  const out = lines.slice();
-  let done = 0;
-
   for (const batch of batches) {
-    const joined = batch.map((j) => j.body).join('\n');
+    const joined = batch.map((j) => j.guarded).join('\n');
     let translated = null;
     try {
       translated = await translateChunk(joined);
-    } catch (_) {
+    } catch (e) {
+      lastErr = e;
       translated = null;
     }
 
-    if (translated && translated.split('\n').length === batch.length) {
-      translated.split('\n').forEach((l, k) => {
-        out[batch[k].idx] = batch[k].prefix + l;
-      });
-    } else if (translated) {
-      // 行数对不上，退化为整批替换首行，余下留原文
-      out[batch[0].idx] = batch[0].prefix + translated.replace(/\s*\n\s*/g, ' ');
+    if (translated) {
+      const parts = translated.split('\n');
+      if (parts.length === batch.length) {
+        batch.forEach((j, k) => {
+          out[j.idx] = j.prefix + restoreInline(parts[k], j.map);
+        });
+        okCount += batch.length;
+      }
+      // 行数对不上时保留原文，宁可未译也不错位或丢内容
     }
 
     done += batch.length;
-    if (onTick) onTick(done, jobs.length);
+    if (onTick) onTick(done, total);
   }
+
+  // 超长段落：按句子切开逐句翻译，再拼回整行
+  for (const j of longOnes) {
+    const segs = splitSentences(j.guarded, limit);
+    const pieces = [];
+    let hit = false;
+    for (const s of segs) {
+      let r = null;
+      try { r = await translateChunk(s); } catch (e) { lastErr = e; }
+      if (r !== null) hit = true;
+      pieces.push(r === null ? s : r);
+    }
+    if (hit) {
+      out[j.idx] = j.prefix + restoreInline(pieces.join(''), j.map);
+      okCount++;
+    }
+    done++;
+    if (onTick) onTick(done, total);
+  }
+
+  // 一行都没译成，视为整体失败，交由上层提示
+  if (!okCount) throw (lastErr || new Error('翻译接口未返回结果'));
 
   return out.join('\n');
 }
@@ -1228,16 +1324,21 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
     btn.disabled = true;
     btn.textContent = '翻译中…';
     try {
+      const bt = await getBrowserTranslator();
+      if (!bt) {
+        toast('当前浏览器无内置翻译模型，改用公共接口：单次 500 字符，每日约 5000 字符', 4500);
+      }
       const out = await translateMarkdown(original, (a, b) => {
         btn.textContent = '翻译中 ' + a + '/' + b;
       });
+      if (!out || out === original) throw new Error('未产生译文');
       translated = out;
       trCacheSet(cacheKey, out);
       showing = true;
       paint(out);
       toast('已译为中文');
     } catch (e) {
-      toast('翻译失败：' + e.message + '（可在设置里配置自建翻译接口）', 5000);
+      toast('翻译失败：' + e.message + '。可在设置里填自建 LibreTranslate 地址', 6000);
     } finally {
       btn.disabled = false;
       label();
