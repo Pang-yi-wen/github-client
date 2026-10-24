@@ -88,11 +88,12 @@ node build.js
 ## 文件
 
 ```
-GitHub.html     成品，单文件，可直接部署
-worker.js       Cloudflare Worker 中转
-build.js        把 src 与 vendor 内联成单文件
-src/shell.html  外壳模板
-src/style.css   样式
-src/app.js      应用逻辑
-vendor/         marked、highlight.js
+GitHub.html           成品，单文件，可直接部署
+worker.js             Cloudflare Worker 中转
+build.js              把 src 与 vendor 内联成单文件
+src/shell.html        外壳模板
+src/style.css         样式
+src/app.js            应用逻辑
+vendor/               marked、highlight.js
+scripts/push-api.js   git 通道不通时经 API 推送（维护用）
 ```
