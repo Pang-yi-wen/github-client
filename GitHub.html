@@ -5826,6 +5826,32 @@ function repoActions(o, r, repo) {
     '</div>';
 }
 
+/**
+ * 读取令牌的作用域。classic token 会通过 X-OAuth-Scopes 返回，
+ * fine-grained token 没有这个响应头，此时返回 null 表示无法判断。
+ */
+let tokenScopes;
+async function getTokenScopes() {
+  if (tokenScopes !== undefined) return tokenScopes;
+  try {
+    const res = await fetch(API_HOST + '/', {
+      headers: { Authorization: 'Bearer ' + TOKEN, Accept: 'application/vnd.github+json' }
+    });
+    const raw = res.headers.get('x-oauth-scopes');
+    tokenScopes = raw === null ? null : raw.split(',').map((s) => s.trim()).filter(Boolean);
+  } catch (_) {
+    tokenScopes = null;
+  }
+  return tokenScopes;
+}
+
+/** true 有权限 / false 明确没有 / null 无法判断（fine-grained） */
+async function hasDeleteRepoScope() {
+  const scopes = await getTokenScopes();
+  if (!scopes) return null;
+  return scopes.indexOf('delete_repo') >= 0;
+}
+
 /** 删除仓库：不可逆，需输入仓库全名确认 */
 function openDeleteRepoDialog(o, r) {
   const mask = $('#modal');
@@ -5837,6 +5863,7 @@ function openDeleteRepoDialog(o, r) {
     '<div class="dialog">' +
       '<h3>删除仓库</h3>' +
       '<p class="hint" style="color:var(--red)">此操作不可撤销。仓库、Issue、PR、星标与 fork 关系都会被移除。</p>' +
+      '<p class="hint">需要令牌带 <code>delete_repo</code> 作用域，仅有 <code>repo</code> 不足以删除。</p>' +
       '<p class="hint">请输入 <code>' + esc(full) + '</code> 以确认：</p>' +
       '<input id="drName" type="text" placeholder="' + esc(full) + '" spellcheck="false">' +
       '<div class="modal-actions">' +
@@ -5867,7 +5894,16 @@ function openDeleteRepoDialog(o, r) {
       location.hash = '#/me';
     } catch (e) {
       $('#drGo').disabled = false;
-      $('#drMsg').textContent = e.message;
+      const raw = String(e.message || '');
+      if (/admin rights|delete_repo|403/i.test(raw)) {
+        $('#drMsg').innerHTML =
+          '令牌权限不足，删除仓库需要 <code>delete_repo</code> 作用域。' +
+          '<a href="https://github.com/settings/tokens" target="_blank" rel="noopener">重新生成令牌</a>' +
+          '时勾选该项，再填入设置。';
+        tokenScopes = undefined;   // 下次重新读取
+      } else {
+        $('#drMsg').textContent = raw;
+      }
     }
   });
 }
@@ -5887,7 +5923,16 @@ function bindRepoActions(o, r, forked) {
   if (up) up.addEventListener('click', () => openUploadDialog(o, r));
 
   const del = $('#actDel');
-  if (del) del.addEventListener('click', () => openDeleteRepoDialog(o, r));
+  if (del) {
+    del.addEventListener('click', () => openDeleteRepoDialog(o, r));
+    // classic token 可直接读出作用域，缺 delete_repo 就先禁用，省得点了才报错
+    hasDeleteRepoScope().then((ok) => {
+      if (ok === false && del.isConnected) {
+        del.disabled = true;
+        del.title = '令牌缺少 delete_repo 作用域，无法删除仓库';
+      }
+    });
+  }
 }
 
 /* ---------- 新建仓库 ---------- */
