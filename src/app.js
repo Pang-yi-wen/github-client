@@ -342,17 +342,26 @@ function readRateHeaders(h) {
 /** 单通道请求 */
 async function fetchVia(ch, path, opts) {
   const url = joinApi(ch, path);
+  const method = opts.method || 'GET';
   const headers = {
     'Accept': opts.accept || 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28'
   };
   if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  if (opts.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    // 明文令牌只发给直连或自建通道
+    if (!ch.trust) throw new Error('写请求不允许经过公共中转');
+  }
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeout || 20000);
+  const init = { headers: headers, signal: ctrl.signal, method: method };
+  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+
   let res;
   try {
-    res = await fetch(url, { headers, signal: ctrl.signal });
+    res = await fetch(url, init);
   } catch (e) {
     const err = new Error(e.name === 'AbortError' ? '通道超时' : '通道无响应');
     err.channelFail = true;
@@ -937,6 +946,7 @@ function repoHeader(repo, tab, srcUrl) {
       ${repo.homepage ? `<span>${ICON.link}<a href="${esc(repo.homepage)}" target="_blank" rel="noopener">${esc(repo.homepage)}</a></span>` : ''}
     </div>
     ${srcLink(srcUrl)}
+    ${canWrite() ? repoActions(o, r, repo.fork) : ''}
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -2572,6 +2582,7 @@ async function viewMe() {
             <span><b>${fmtNum(u.followers)}</b> 关注者</span>
             <a href="#/u/${encodeURIComponent(u.login)}">公开主页 →</a>
           </div>
+          ${canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">新建仓库</button></div>' : ''}
         </div>
       </div>
       <div class="panel">
@@ -2582,6 +2593,9 @@ async function viewMe() {
         <div class="panel-head">已 Star · ${starred.length}</div>
         ${starred.length ? starred.map(repoCard).join('') : '<div class="empty">还没有收藏</div>'}
       </div>`;
+
+    const nr = $('#newRepo');
+    if (nr) nr.addEventListener('click', openNewRepoDialog);
   } catch (e) {
     app.innerHTML = errorBox('无法读取账户', e.message);
   }
@@ -2768,6 +2782,16 @@ async function openSettings() {
       </div>
 
       <div class="set-block">
+        <h4>写操作</h4>
+        <p class="hint">默认关闭，仅读取。开启后可在仓库页收藏、Fork 与上传文件，并在「我的」页新建仓库。
+           写请求只发给直连或自建通道，不经过公共中转。</p>
+        <label class="form-check">
+          <input type="checkbox" id="wrEn" ${writeEnabled() ? 'checked' : ''}>
+          <span>启用写操作（需要带 <code>repo</code> 作用域的令牌）</span>
+        </label>
+      </div>
+
+      <div class="set-block">
         <h4>翻译</h4>
         <p class="hint" style="margin-bottom:10px">
           英文介绍会显示「译成中文」按钮。五个通道按顺序尝试，前一个失败自动换下一个；
@@ -2835,6 +2859,14 @@ async function openSettings() {
     refreshCacheInfo();
     toast(n ? '已清空 ' + n + ' 项缓存' : '缓存本来就是空的');
   });
+
+  const wrEn = $('#wrEn');
+  if (wrEn) {
+    wrEn.addEventListener('change', () => {
+      LS.set('ghl_write', wrEn.checked ? '1' : '');
+      toast(wrEn.checked ? '已启用写操作' : '已关闭写操作');
+    });
+  }
 
   const refreshTrStatus = async () => {
     const el = $('#trStatus');
@@ -3015,7 +3047,278 @@ async function route() {
     app.innerHTML = errorBox('出错了', e.message);
   } finally {
     bindSrcLinks();
+    if (seg[0] === 'r' && seg[2]) bindRepoActions(seg[1], seg[2]);
   }
+}
+
+/* ---------------------------- 写操作 ---------------------------- */
+
+/**
+ * 写操作默认关闭，需在设置中启用。
+ * 请求只发给直连或自建通道，不经过公共中转，避免明文令牌被第三方获取。
+ */
+
+const writeEnabled = () => LS.get('ghl_write', '') === '1';
+const canWrite = () => writeEnabled() && !!TOKEN;
+
+async function ghWrite(method, path, body) {
+  if (!TOKEN) throw new Error('需要访问令牌');
+  await ensureChannels();
+
+  const trusted = channelOrder.filter((ch) => ch.trust);
+  if (!trusted.length) {
+    throw new Error('当前仅公共中转可用；写操作需要直连或自建通道');
+  }
+
+  let lastErr = null;
+  for (const ch of trusted) {
+    try {
+      const out = await fetchVia(ch, path, { method: method, body: body, timeout: 45000 });
+      clearCache();   // 内容已变，缓存不再可靠
+      return out;
+    } catch (e) {
+      if (!e.channelFail) throw e;
+      lastErr = e;
+    }
+  }
+  throw (lastErr || new Error('写入失败'));
+}
+
+/** 是否已收藏。204 表示已收藏，404 表示未收藏 */
+async function checkStarred(o, r) {
+  if (!TOKEN) return null;
+  const key = 'ghstar:' + o + '/' + r;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const rec = JSON.parse(raw);
+      if (rec && Date.now() - rec.t < 10 * 60 * 1000) return rec.v;
+    }
+  } catch (_) {}
+
+  try {
+    const res = await fetch(API_HOST + '/user/starred/' + o + '/' + r, {
+      headers: { Authorization: 'Bearer ' + TOKEN, Accept: 'application/vnd.github+json' }
+    });
+    const v = res.status === 204;
+    try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), v: v })); } catch (_) {}
+    return v;
+  } catch (_) {
+    return null;
+  }
+}
+
+function forgetStar(o, r) {
+  try { localStorage.removeItem('ghstar:' + o + '/' + r); } catch (_) {}
+}
+
+async function toggleStar(o, r, starred, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  try {
+    await ghWrite(starred ? 'DELETE' : 'PUT', '/user/starred/' + o + '/' + r, undefined);
+    forgetStar(o, r);
+    toast(starred ? '已取消收藏' : '已收藏');
+    await refreshStarBtn(o, r, btn);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    toast('操作失败：' + e.message, 5000);
+  }
+}
+
+async function refreshStarBtn(o, r, btn) {
+  const v = await checkStarred(o, r);
+  btn.dataset.starred = v ? '1' : '0';
+  btn.textContent = v ? '★ 已收藏' : '☆ 收藏';
+  btn.disabled = false;
+}
+
+async function doFork(o, r, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  try {
+    const out = await ghWrite('POST', '/repos/' + o + '/' + r + '/forks', {});
+    toast('已 fork：' + (out.full_name || ''));
+    btn.textContent = '已 fork';
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    toast('Fork 失败：' + e.message, 5000);
+  }
+}
+
+/* ---------- 界面：仓库操作条 ---------- */
+
+function repoActions(o, r, forked) {
+  if (!canWrite()) return '';
+  return '<div class="repo-actions">' +
+    '<button type="button" class="btn sm" id="actStar" data-starred="">收藏</button>' +
+    (forked ? '<span class="dim" style="font-size:12px">已 fork 过的仓库</span>'
+            : '<button type="button" class="btn sm" id="actFork">Fork</button>') +
+    '<button type="button" class="btn sm" id="actUpload">上传文件</button>' +
+    '</div>';
+}
+
+function bindRepoActions(o, r, forked) {
+  const star = $('#actStar');
+  if (star) {
+    refreshStarBtn(o, r, star);
+    star.addEventListener('click', () => {
+      toggleStar(o, r, star.dataset.starred === '1', star);
+    });
+  }
+  const fork = $('#actFork');
+  if (fork) fork.addEventListener('click', () => doFork(o, r, fork));
+
+  const up = $('#actUpload');
+  if (up) up.addEventListener('click', () => openUploadDialog(o, r));
+}
+
+/* ---------- 新建仓库 ---------- */
+
+function openNewRepoDialog() {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>新建仓库</h3>' +
+      '<p class="hint">需要带 <code>repo</code> 作用域的令牌。</p>' +
+      '<input id="nrName" type="text" placeholder="仓库名，如 my-project" spellcheck="false">' +
+      '<input id="nrDesc" type="text" placeholder="描述（可选）">' +
+      '<div class="form-check">' +
+        '<label><input type="checkbox" id="nrPrivate"> 私有仓库</label>' +
+        '<label><input type="checkbox" id="nrInit" checked> 初始化 README</label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="nrMsg" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="nrCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="nrGo">创建</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#nrCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#nrName').focus();
+
+  $('#nrGo').addEventListener('click', async () => {
+    const name = $('#nrName').value.trim();
+    if (!name) { $('#nrMsg').textContent = '仓库名不能为空'; return; }
+    $('#nrGo').disabled = true;
+    $('#nrMsg').textContent = '创建中…';
+    try {
+      const out = await ghWrite('POST', '/user/repos', {
+        name: name,
+        description: $('#nrDesc').value.trim(),
+        private: $('#nrPrivate').checked,
+        auto_init: $('#nrInit').checked
+      });
+      close();
+      toast('已创建：' + out.full_name);
+      location.hash = link(out.owner.login, out.name);
+    } catch (e) {
+      $('#nrGo').disabled = false;
+      $('#nrMsg').textContent = e.message;
+    }
+  });
+}
+
+/* ---------- 上传文件 ---------- */
+
+function openUploadDialog(o, r) {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>上传到 ' + esc(o + '/' + r) + '</h3>' +
+      '<p class="hint">选择本地文件，按 UTF-8 文本读入后写入仓库。已存在的文件会被覆盖。</p>' +
+      '<div class="drop-zone" id="upZone">' +
+        '<input type="file" id="upFile" multiple hidden>' +
+        '<span>点击选择文件，或拖到此处</span>' +
+      '</div>' +
+      '<div class="file-list" id="upList"></div>' +
+      '<input id="upMsg" type="text" placeholder="提交信息，如 Add files" value="Add files via web client">' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="upStatus" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="upCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="upGo" disabled>上传</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#upCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+
+  const picked = [];
+  const zone = $('#upZone');
+  const input = $('#upFile');
+
+  const paint = () => {
+    $('#upList').innerHTML = picked.map((f, i) =>
+      '<div class="up-item"><span>' + esc(f.name) + '</span>' +
+      '<button type="button" class="up-del" data-i="' + i + '">移除</button></div>').join('');
+    $('#upGo').disabled = picked.length === 0;
+    $('#upGo').textContent = picked.length ? '上传 ' + picked.length + ' 个文件' : '上传';
+    $('#upList').querySelectorAll('.up-del').forEach((b) => {
+      b.addEventListener('click', () => { picked.splice(Number(b.dataset.i), 1); paint(); });
+    });
+  };
+
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('over');
+    Array.from(e.dataTransfer.files || []).forEach((f) => picked.push(f));
+    paint();
+  });
+  input.addEventListener('change', () => {
+    Array.from(input.files || []).forEach((f) => picked.push(f));
+    paint();
+  });
+
+  $('#upGo').addEventListener('click', async () => {
+    const msg = $('#upMsg').value.trim() || 'Add files via web client';
+    const btn = $('#upGo');
+    btn.disabled = true;
+    let doneCount = 0;
+    const failures = [];
+
+    for (const f of picked) {
+      $('#upStatus').textContent = '上传 ' + f.name + '（' + (doneCount + 1) + '/' + picked.length + '）';
+      try {
+        const text = await f.text();
+        const b64 = btoa(unescape(encodeURIComponent(text)));
+        await ghWrite('PUT', '/repos/' + o + '/' + r + '/contents/' + encPath(f.name), {
+          message: msg,
+          content: b64
+        });
+        doneCount++;
+      } catch (e) {
+        failures.push(f.name + '：' + e.message);
+      }
+    }
+
+    if (!failures.length) {
+      close();
+      toast('已上传 ' + doneCount + ' 个文件');
+      location.reload();
+    } else {
+      btn.disabled = false;
+      $('#upStatus').textContent = '成功 ' + doneCount + ' 个，失败 ' + failures.length + ' 个';
+      if (failures.length) toast(failures[0], 6000);
+    }
+  });
+
+  paint();
 }
 
 /* ---------------------------- 搜索面板 ---------------------------- */
