@@ -356,6 +356,12 @@ code, pre, .mono {
   gap: 6px;
 }
 
+.tr-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .icon-btn {
   background: transparent;
   border: none;

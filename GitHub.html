@@ -367,6 +367,12 @@ code, pre, .mono {
   gap: 6px;
 }
 
+.tr-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .icon-btn {
   background: transparent;
   border: none;
@@ -3517,15 +3523,20 @@ async function myMemoryTranslate(text) {
 /** 用户自建 LibreTranslate（设置里可选） */
 async function libreTranslate(text) {
   const base = String(LS.get('ghl_translate', '') || '').trim().replace(/\/+$/, '');
-  if (!base) throw new Error('未配置');
+  if (!base) throw new Error('未配置 LibreTranslate 地址');
+  const key = String(LS.get('ghl_translate_key', '') || '').trim();
+
+  const body = { q: text, source: 'en', target: 'zh', format: 'text' };
+  if (key) body.api_key = key;
+
   const res = await fetch(base + '/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: text, source: 'en', target: 'zh', format: 'text' })
+    body: JSON.stringify(body)
   });
   if (!res.ok) throw new Error('LibreTranslate HTTP ' + res.status);
   const j = await res.json();
-  if (!j || !j.translatedText) throw new Error('LibreTranslate 无结果');
+  if (!j || !j.translatedText) throw new Error('LibreTranslate 无返回');
   return j.translatedText;
 }
 
@@ -3588,45 +3599,78 @@ async function myMemoryLong(s) {
 
 let lastTrErr = null;
 
-/** 批量翻译，返回与 items 等长的数组，失败位置为 null */
-async function translateBatch(items) {
-  const bt = await getBrowserTranslator();
-  if (bt) {
+/** 通道顺序：选定的提到最前，其余仍作兜底 */
+const TR_MODES = {
+  auto: ['browser', 'tencent', 'pollinations', 'libre', 'mymemory'],
+  browser: ['browser', 'tencent', 'pollinations', 'libre', 'mymemory'],
+  tencent: ['tencent', 'browser', 'pollinations', 'libre', 'mymemory'],
+  pollinations: ['pollinations', 'tencent', 'browser', 'libre', 'mymemory'],
+  libre: ['libre', 'tencent', 'browser', 'pollinations', 'mymemory'],
+  mymemory: ['mymemory', 'tencent', 'browser', 'pollinations', 'libre']
+};
+
+function trOrder() {
+  const m = String(LS.get('ghl_tr_mode', 'auto') || 'auto');
+  return TR_MODES[m] || TR_MODES.auto;
+}
+
+/** 单通道翻译一批，失败抛错，部分成功时返回 null 占位 */
+async function viaChannel(ch, list) {
+  if (ch === 'browser') {
+    const bt = await getBrowserTranslator();
+    if (!bt) throw new Error('浏览器无内置翻译模型');
     const out = [];
-    for (const s of items) {
+    for (const s of list) {
       try { out.push(await bt.translate(s)); }
       catch (e) { lastTrErr = e; out.push(null); }
     }
     return out;
   }
 
-  lastTrErr = null;
-  try {
-    return await tencentTranslate(items);
-  } catch (e) {
-    lastTrErr = e;
-  }
+  if (ch === 'tencent') return tencentTranslate(list);
 
-  // Pollinations：AI 翻译，质量好但慢，用作第二顺位
-  try {
+  if (ch === 'pollinations') {
     const out = [];
-    for (const s of items) out.push(await pollinationsTranslate(s));
+    for (const s of list) out.push(await pollinationsTranslate(s));
     return out;
-  } catch (e) {
-    lastTrErr = e;
   }
 
-  const out = [];
-  for (const s of items) {
-    let r = null;
+  if (ch === 'libre') {
+    const out = [];
+    for (const s of list) out.push(await libreTranslate(s));
+    return out;
+  }
+
+  if (ch === 'mymemory') {
+    const out = [];
+    for (const s of list) out.push(await myMemoryLong(s));
+    return out;
+  }
+
+  throw new Error('未知翻译通道：' + ch);
+}
+
+/** 批量翻译，逐通道补齐缺失项，返回与 items 等长的数组 */
+async function translateBatch(items) {
+  const out = new Array(items.length).fill(null);
+  lastTrErr = null;
+
+  for (const ch of trOrder()) {
+    const pending = [];
+    out.forEach((v, i) => { if (v === null) pending.push(i); });
+    if (!pending.length) break;
+
     try {
-      r = await libreTranslate(s);
+      const res = await viaChannel(ch, pending.map((i) => items[i]));
+      res.forEach((t, k) => {
+        if (t !== null && t !== undefined && String(t).trim()) out[pending[k]] = t;
+      });
     } catch (e) {
       lastTrErr = e;
-      try { r = await myMemoryLong(s); } catch (e2) { lastTrErr = e2; }
     }
-    out.push(r);
   }
+
+  if (out.every((v) => v === null)) throw (lastTrErr || new Error('翻译接口均不可用'));
   return out;
 }
 
@@ -5092,16 +5136,35 @@ async function openSettings() {
       </div>
 
       <div class="set-block">
-        <h4>翻译接口 <span class="dim" style="font-weight:400">可选</span></h4>
-        <p class="hint" style="margin-bottom:8px">
-          英文介绍会多出一个「译成中文」按钮。默认优先用浏览器内置的本地翻译模型（不限量，内容不出本机），
-          不支持时降级到 MyMemory（500 字符/次、约 5000 字符/天）。自建了 LibreTranslate 的话，填地址可绕开这两个限制。
+        <h4>翻译</h4>
+        <p class="hint" style="margin-bottom:10px">
+          英文介绍会显示「译成中文」按钮。五个通道按顺序尝试，前一个失败自动换下一个；
+          选定的通道提到最前，其余仍作兜底。
         </p>
-        <input id="trl" type="text" placeholder="https://your-libretranslate.example.com"
-               value="${esc(LS.get('ghl_translate', ''))}" spellcheck="false">
+
+        <label class="filt" style="margin-bottom:10px">
+          <span>优先使用</span>
+          <select id="trMode">
+            <option value="auto">自动（本地模型优先）</option>
+            <option value="browser">浏览器本地模型</option>
+            <option value="tencent">腾讯翻译</option>
+            <option value="pollinations">Pollinations</option>
+            <option value="libre">自建 LibreTranslate</option>
+            <option value="mymemory">MyMemory</option>
+          </select>
+        </label>
+
+        <div class="tr-custom">
+          <input id="trl" type="text" placeholder="LibreTranslate 地址，如 https://lt.example.com"
+                 value="${esc(LS.get('ghl_translate', ''))}" spellcheck="false">
+          <input id="trlKey" type="text" placeholder="API Key（该服务要求时填写）"
+                 value="${esc(LS.get('ghl_translate_key', ''))}" spellcheck="false">
+        </div>
+
         <div class="modal-actions" style="margin-top:10px">
-          <button class="btn ghost sm" id="trlClear">清除</button>
+          <span class="dim" id="trStatus" style="font-size:11.5px"></span>
           <span class="spacer"></span>
+          <button class="btn ghost sm" id="trlClear">恢复自动</button>
           <button class="btn primary sm" id="trlSave">保存</button>
         </div>
       </div>
@@ -5141,16 +5204,36 @@ async function openSettings() {
     toast(n ? '已清空 ' + n + ' 项缓存' : '缓存本来就是空的');
   });
 
+  const refreshTrStatus = async () => {
+    const el = $('#trStatus');
+    if (!el) return;
+    const bt = await getBrowserTranslator();
+    const bits = [bt ? '本地模型可用' : '无本地模型'];
+    if (LS.get('ghl_translate', '')) bits.push('LibreTranslate 已配置');
+    el.textContent = bits.join(' · ');
+  };
+
+  const trModeEl = $('#trMode');
+  if (trModeEl) trModeEl.value = LS.get('ghl_tr_mode', 'auto');
+  refreshTrStatus();
+
   $('#trlSave').addEventListener('click', () => {
-    const v = $('#trl').value.trim();
-    LS.set('ghl_translate', v);
-    toast(v ? '已保存翻译接口' : '已清除翻译接口');
+    LS.set('ghl_tr_mode', $('#trMode') ? $('#trMode').value : 'auto');
+    LS.set('ghl_translate', $('#trl').value.trim());
+    LS.set('ghl_translate_key', $('#trlKey').value.trim());
+    toast('翻译设置已保存');
+    refreshTrStatus();
   });
 
   $('#trlClear').addEventListener('click', () => {
+    LS.set('ghl_tr_mode', 'auto');
     LS.set('ghl_translate', '');
+    LS.set('ghl_translate_key', '');
+    if ($('#trMode')) $('#trMode').value = 'auto';
     $('#trl').value = '';
-    toast('已清除翻译接口');
+    $('#trlKey').value = '';
+    toast('已恢复自动');
+    refreshTrStatus();
   });
 
   $('#tkClear').addEventListener('click', () => {
