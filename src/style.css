@@ -482,6 +482,16 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
   flex-wrap: wrap;
 }
 
+.btn.danger {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
+}
+.btn.danger:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-color: var(--red);
+}
+.btn.danger:disabled { opacity: .5; }
+
 /* ---------- 对话框 ---------- */
 
 .dialog {

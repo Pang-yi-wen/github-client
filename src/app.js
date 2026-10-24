@@ -318,7 +318,9 @@ function updateChannelBadge() {
   if (!ch) { el.textContent = '—'; return; }
   const st = channelStatus[ch.id];
   el.textContent = ch.label + (st ? ' ' + st.ms + 'ms' : '');
-  el.title = '当前通道：' + ch.label + '\n' + ch.note + '\n点击查看全部通道';
+  el.title = '当前通道：' + ch.label + '\n' + ch.note +
+    (!ch.trust && TOKEN ? '\n\n注意：访问令牌正经由此服务转发，它可读取你名下的全部仓库' : '') +
+    '\n点击查看全部通道';
   el.classList.toggle('warn', !ch.trust);
 }
 
@@ -946,7 +948,7 @@ function repoHeader(repo, tab, srcUrl) {
       ${repo.homepage ? `<span>${ICON.link}<a href="${esc(repo.homepage)}" target="_blank" rel="noopener">${esc(repo.homepage)}</a></span>` : ''}
     </div>
     ${srcLink(srcUrl)}
-    ${canWrite() ? repoActions(o, r, repo.fork) : ''}
+    ${canWrite() ? repoActions(o, r, repo) : ''}
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -2253,9 +2255,21 @@ async function viewBranches(o, r) {
 async function viewUser(login) {
   loading();
   let u, repos;
+
+  // 先看是不是本人：本人要走 /user/repos，否则 /users/... 只返回公开仓库
+  let isMe = false;
+  if (TOKEN) {
+    try {
+      const m = await me();
+      isMe = String(m.login).toLowerCase() === String(login).toLowerCase();
+    } catch (_) {}
+  }
+
   try {
     u = await gh('/users/' + encodeURIComponent(login));
-    repos = await gh('/users/' + encodeURIComponent(login) + '/repos?sort=pushed&per_page=100');
+    repos = isMe
+      ? await gh('/user/repos?sort=pushed&per_page=100&affiliation=owner')
+      : await gh('/users/' + encodeURIComponent(login) + '/repos?sort=pushed&per_page=100');
   } catch (e) {
     app.innerHTML = errorBox('无法读取用户', e.message);
     return;
@@ -2268,7 +2282,7 @@ async function viewUser(login) {
       ${avatar(u.avatar_url, 104)}
       <div class="p-info">
         <h1>${esc(u.name || u.login)}</h1>
-        <div class="login">${esc(u.login)}</div>
+        <div class="login">${esc(u.login)}${isMe ? ' <span class="badge">本人</span>' : ''}</div>
         ${u.bio ? `<div class="p-bio">${esc(u.bio)}</div>` : ''}
         <div class="p-stats">
           <span><b>${fmtNum(u.public_repos)}</b> 仓库</span>
@@ -2279,12 +2293,16 @@ async function viewUser(login) {
           <span>加入于 ${fmtDate(u.created_at)}</span>
         </div>
         ${srcLink('https://github.com/' + encodeURIComponent(u.login))}
+        ${isMe && canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">新建仓库</button></div>' : ''}
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head">公开仓库 · ${repos.length}</div>
-      ${repos.length ? repos.map(repoCard).join('') : '<div class="empty">没有公开仓库</div>'}
+      <div class="panel-head">${isMe ? '我的仓库' : '公开仓库'} · ${repos.length}</div>
+      ${repos.length ? repos.map(repoCard).join('') : '<div class="empty">' + (isMe ? '没有仓库' : '没有公开仓库') + '</div>'}
     </div>`;
+
+  const nr = $('#newRepo');
+  if (nr) nr.addEventListener('click', openNewRepoDialog);
 }
 
 /* ---------------------------- 搜索 ---------------------------- */
@@ -3180,14 +3198,63 @@ async function doFork(o, r, btn) {
 
 /* ---------- 界面：仓库操作条 ---------- */
 
-function repoActions(o, r, forked) {
+function repoActions(o, r, repo) {
   if (!canWrite()) return '';
+  const isAdmin = !!(repo && repo.permissions && repo.permissions.admin);
+  const isFork = !!(repo && repo.fork);
   return '<div class="repo-actions">' +
     '<button type="button" class="btn sm" id="actStar" data-starred="">收藏</button>' +
-    (forked ? '<span class="dim" style="font-size:12px">已 fork 过的仓库</span>'
+    (isFork ? '<span class="dim" style="font-size:12px">fork 来的仓库</span>'
             : '<button type="button" class="btn sm" id="actFork">Fork</button>') +
     '<button type="button" class="btn sm" id="actUpload">上传文件</button>' +
+    (isAdmin ? '<button type="button" class="btn sm danger" id="actDel">删除仓库</button>' : '') +
     '</div>';
+}
+
+/** 删除仓库：不可逆，需输入仓库全名确认 */
+function openDeleteRepoDialog(o, r) {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  const full = o + '/' + r;
+
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>删除仓库</h3>' +
+      '<p class="hint" style="color:var(--red)">此操作不可撤销。仓库、Issue、PR、星标与 fork 关系都会被移除。</p>' +
+      '<p class="hint">请输入 <code>' + esc(full) + '</code> 以确认：</p>' +
+      '<input id="drName" type="text" placeholder="' + esc(full) + '" spellcheck="false">' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="drMsg" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="drCancel">取消</button>' +
+        '<button type="button" class="btn danger" id="drGo">永久删除</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#drCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#drName').focus();
+
+  $('#drGo').addEventListener('click', async () => {
+    if ($('#drName').value.trim() !== full) {
+      $('#drMsg').textContent = '输入与仓库名不一致';
+      return;
+    }
+    $('#drGo').disabled = true;
+    $('#drMsg').textContent = '删除中…';
+    try {
+      await ghWrite('DELETE', '/repos/' + o + '/' + r, undefined);
+      forgetStar(o, r);
+      close();
+      toast('已删除 ' + full);
+      location.hash = '#/me';
+    } catch (e) {
+      $('#drGo').disabled = false;
+      $('#drMsg').textContent = e.message;
+    }
+  });
 }
 
 function bindRepoActions(o, r, forked) {
@@ -3203,6 +3270,9 @@ function bindRepoActions(o, r, forked) {
 
   const up = $('#actUpload');
   if (up) up.addEventListener('click', () => openUploadDialog(o, r));
+
+  const del = $('#actDel');
+  if (del) del.addEventListener('click', () => openDeleteRepoDialog(o, r));
 }
 
 /* ---------- 新建仓库 ---------- */
