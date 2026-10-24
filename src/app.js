@@ -2112,7 +2112,10 @@ async function viewReleases(o, r) {
 
   app.innerHTML = repoHeader(repo, 'releases') + `
     <div class="panel">
-      <div class="panel-head">共 ${rels.length} 个发行版</div>
+      <div class="panel-head">共 ${rels.length} 个发行版
+        <span class="spacer"></span>
+        ${canWrite() ? '<button type="button" class="btn sm primary" id="newRel">新建发行版</button>' : ''}
+      </div>
       ${rels.length ? rels.map(rel => `
         <div class="release-item">
           <div class="rel-head">
@@ -2124,6 +2127,7 @@ async function viewReleases(o, r) {
             <span class="dim">${fmtDate(rel.published_at)}</span>
             <a class="btn sm ghost" href="${link(o, r, 'tree', rel.tag_name, '')}">浏览代码</a>
             <a class="btn sm primary" href="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(rel.tag_name)}">${ICON.download} ZIP</a>
+            ${canWrite() ? `<button type="button" class="btn sm ghost rel-del" data-id="${rel.id}" data-name="${esc(rel.name || rel.tag_name)}">删除</button>` : ''}
           </div>
           ${rel.body ? `<div class="rel-body markdown-body">${renderMarkdown(rel.body, ctx).innerHTML}</div>` : ''}
           ${(rel.assets || []).length ? `<div class="rel-assets">
@@ -2132,6 +2136,14 @@ async function viewReleases(o, r) {
           </div>` : ''}
         </div>`).join('') : '<div class="empty">暂无发行版</div>'}
     </div>`;
+
+  const nrel = $('#newRel');
+  if (nrel) {
+    nrel.addEventListener('click', () => openNewReleaseDialog(o, r, repo.default_branch));
+  }
+  app.querySelectorAll('.rel-del').forEach((b) => {
+    b.addEventListener('click', () => deleteRelease(o, r, b.getAttribute('data-id'), b.getAttribute('data-name'), b));
+  });
 }
 
 async function viewCommits(o, r, ref, page) {
@@ -3010,6 +3022,12 @@ async function route() {
       case 'me':
         document.querySelector('.topnav a[data-nav="me"]').classList.add('on');
         return await viewMe();
+      case 'gists':
+        document.querySelector('.topnav a[data-nav="gists"]').classList.add('on');
+        return await viewGists();
+      case 'g':
+        document.querySelector('.topnav a[data-nav="gists"]').classList.add('on');
+        return await viewGist(seg[1]);
       case 'tools':
         document.querySelector('.topnav a[data-nav="tools"]').classList.add('on');
         return await viewTools();
@@ -3508,6 +3526,248 @@ function bindIssueWrite(o, r, n, issue) {
     st.addEventListener('click', () => {
       setIssueState(o, r, n, issue.state === 'open' ? 'closed' : 'open', st);
     });
+  }
+}
+
+/* ---------------------------- Gist ---------------------------- */
+
+function gistRow(g) {
+  const files = Object.keys(g.files || {});
+  const first = files[0] || '';
+  return '<div class="file-row" data-href="#/g/' + esc(g.id) + '">' +
+    ICON.file +
+    '<span class="fname-wrap"><span class="fname">' + esc(g.description || first) + '</span></span>' +
+    '<span class="fmsg">' + files.length + ' 个文件 · ' + (g.public ? '公开' : '私密') + '</span>' +
+    '<span class="fsize">' + timeAgo(g.updated_at) + '</span>' +
+  '</div>';
+}
+
+async function viewGists() {
+  loading();
+  document.title = '我的 Gist';
+  if (!TOKEN) {
+    app.innerHTML = errorBox('需要访问令牌', 'Gist 属于账户内容，需先配置令牌。', '')
+      .replace(/<button class="btn" onclick="location\.reload\(\)">重试<\/button>/,
+        '<button class="btn primary" onclick="openSettings()">立即设置</button>');
+    return;
+  }
+
+  let gists = [];
+  try {
+    gists = await gh('/gists?per_page=50');
+  } catch (e) {
+    app.innerHTML = errorBox('无法读取 Gist', e.message);
+    return;
+  }
+
+  app.innerHTML =
+    '<h2 class="page-title">我的 Gist</h2>' +
+    (canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newGist">新建 Gist</button></div>' : '') +
+    '<div class="panel">' +
+      '<div class="panel-head">共 ' + gists.length + ' 个' +
+        (gists.length >= 50 ? '（仅显示最近 50 个）' : '') + '</div>' +
+      (gists.length ? gists.map(gistRow).join('') : '<div class="empty">还没有 Gist</div>') +
+    '</div>';
+
+  bindFileRows();
+  const ng = $('#newGist');
+  if (ng) ng.addEventListener('click', openNewGistDialog);
+}
+
+function gistFileHtml(name, f) {
+  let html = esc(f.content || '');
+  if (f.language) {
+    try {
+      html = hljs.highlight(f.content || '', {
+        language: String(f.language).toLowerCase(),
+        ignoreIllegals: true
+      }).value;
+    } catch (_) {}
+  }
+  const truncated = f.truncated && f.raw_url;
+  return '<div class="panel">' +
+    '<div class="panel-head">' + ICON.file +
+      '<span class="path-crumb">' + esc(name) + '</span>' +
+      '<span class="spacer"></span>' +
+      '<a class="btn sm ghost" href="' + esc(f.raw_url || '#') + '" target="_blank" rel="noopener">原始文件</a>' +
+    '</div>' +
+    '<pre class="code-view"><code class="hljs">' + html + '</code></pre>' +
+    (truncated ? '<div class="empty">内容过长已截断，可点「原始文件」查看完整内容</div>' : '') +
+  '</div>';
+}
+
+async function viewGist(id) {
+  loading();
+  let g;
+  try {
+    g = await gh('/gists/' + id);
+  } catch (e) {
+    app.innerHTML = errorBox('无法读取 Gist', e.message);
+    return;
+  }
+  document.title = (g.description || 'Gist') + ' · ' + id;
+
+  const files = Object.keys(g.files || {});
+  const owner = g.owner ? g.owner.login : '';
+
+  app.innerHTML =
+    '<h2 class="page-title">' + esc(g.description || '未命名 Gist') + '</h2>' +
+    '<div class="repo-meta" style="margin-bottom:14px">' +
+      (owner ? '<span>' + esc(owner) + '</span>' : '') +
+      '<span>' + (g.public ? '公开' : '私密') + '</span>' +
+      '<span>' + ICON.clock + ' ' + timeAgo(g.updated_at) + '</span>' +
+      '<span>' + files.length + ' 个文件 · ' + fmtNum(g.comments) + ' 条评论</span>' +
+    '</div>' +
+    srcLink('https://gist.github.com/' + (owner || '') + '/' + esc(id)) +
+    files.map((n) => gistFileHtml(n, g.files[n])).join('') +
+    (canWrite() && owner === (meCache ? meCache.login : owner)
+      ? '<div class="repo-actions"><button type="button" class="btn sm ghost" id="delGist">删除此 Gist</button></div>'
+      : '');
+
+  const del = $('#delGist');
+  if (del) {
+    del.addEventListener('click', async () => {
+      if (!confirm('删除 Gist「' + (g.description || id) + '」？此操作不可撤销。')) return;
+      const original = del.textContent;
+      del.disabled = true;
+      del.textContent = '删除中…';
+      try {
+        await ghWrite('DELETE', '/gists/' + id, undefined);
+        toast('已删除');
+        location.hash = '#/gists';
+      } catch (e) {
+        del.disabled = false;
+        del.textContent = original;
+        toast('删除失败：' + e.message, 5000);
+      }
+    });
+  }
+}
+
+function openNewGistDialog() {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>新建 Gist</h3>' +
+      '<p class="hint">内容以 UTF-8 文本提交。文件名用于推断语法高亮。</p>' +
+      '<input id="ngDesc" type="text" placeholder="描述（可选）">' +
+      '<input id="ngName" type="text" placeholder="文件名，如 example.js" spellcheck="false">' +
+      '<textarea id="ngBody" placeholder="文件内容"></textarea>' +
+      '<div class="form-check">' +
+        '<label><input type="checkbox" id="ngPublic"> 公开 Gist（不选则为私密）</label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="ngMsg" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="ngCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="ngGo">创建</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#ngCancel').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#ngDesc').focus();
+
+  $('#ngGo').addEventListener('click', async () => {
+    const name = $('#ngName').value.trim() || 'gist.txt';
+    const body = $('#ngBody').value;
+    if (!body.trim()) { $('#ngMsg').textContent = '内容不能为空'; return; }
+
+    $('#ngGo').disabled = true;
+    $('#ngMsg').textContent = '创建中…';
+    try {
+      const files = {};
+      files[name] = { content: body };
+      const out = await ghWrite('POST', '/gists', {
+        description: $('#ngDesc').value.trim(),
+        public: $('#ngPublic').checked,
+        files: files
+      });
+      close();
+      toast('已创建 Gist');
+      location.hash = '#/g/' + out.id;
+    } catch (e) {
+      $('#ngGo').disabled = false;
+      $('#ngMsg').textContent = e.message;
+    }
+  });
+}
+
+/* ---------------------------- Release ---------------------------- */
+
+function openNewReleaseDialog(o, r, defaultBranch) {
+  const mask = $('#modal');
+  mask.hidden = false;
+  mask.classList.add('top');
+  mask.innerHTML =
+    '<div class="dialog">' +
+      '<h3>新建发行版</h3>' +
+      '<p class="hint">' + esc(o + '/' + r) + '。标签不存在时会基于所选分支创建。</p>' +
+      '<input id="nrTag" type="text" placeholder="标签名，如 v1.0.0" spellcheck="false">' +
+      '<input id="nrTitle" type="text" placeholder="标题（可选，默认用标签名）">' +
+      '<textarea id="nrBody" placeholder="说明，支持 Markdown"></textarea>' +
+      '<div class="form-row">' +
+        '<label class="filt"><span>基于分支</span><input id="nrBranch" type="text" value="' +
+          esc(defaultBranch || 'main') + '" spellcheck="false" style="min-width:120px"></label>' +
+      '</div>' +
+      '<div class="form-check">' +
+        '<label><input type="checkbox" id="nrDraft"> 存为草稿</label>' +
+        '<label><input type="checkbox" id="nrPre"> 标记为预发行</label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<span class="dim" id="nrMsg2" style="font-size:12px"></span>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="btn" id="nrCancel2">取消</button>' +
+        '<button type="button" class="btn primary" id="nrGo2">发布</button>' +
+      '</div>' +
+    '</div>';
+
+  const close = () => { mask.hidden = true; mask.classList.remove('top'); mask.innerHTML = ''; };
+  $('#nrCancel2').addEventListener('click', close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#nrTag').focus();
+
+  $('#nrGo2').addEventListener('click', async () => {
+    const tag = $('#nrTag').value.trim();
+    if (!tag) { $('#nrMsg2').textContent = '标签名不能为空'; return; }
+
+    $('#nrGo2').disabled = true;
+    $('#nrMsg2').textContent = '发布中…';
+    try {
+      const out = await ghWrite('POST', '/repos/' + o + '/' + r + '/releases', {
+        tag_name: tag,
+        name: $('#nrTitle').value.trim() || tag,
+        body: $('#nrBody').value,
+        draft: $('#nrDraft').checked,
+        prerelease: $('#nrPre').checked,
+        target_commitish: $('#nrBranch').value.trim() || defaultBranch
+      });
+      close();
+      toast('已发布 ' + tag);
+      location.hash = link(o, r, 'releases');
+    } catch (e) {
+      $('#nrGo2').disabled = false;
+      $('#nrMsg2').textContent = e.message;
+    }
+  });
+}
+
+async function deleteRelease(o, r, id, name, btn) {
+  if (!confirm('删除发行版「' + name + '」？关联的 Git 标签不会一并删除。')) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '删除中…';
+  try {
+    await ghWrite('DELETE', '/repos/' + o + '/' + r + '/releases/' + id, undefined);
+    toast('已删除');
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = original;
+    toast('删除失败：' + e.message, 5000);
   }
 }
 
