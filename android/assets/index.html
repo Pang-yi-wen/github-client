@@ -2766,7 +2766,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.22';
+const APP_VERSION = '1.0.23';
 'use strict';
 
 /* ============================================================
@@ -4361,10 +4361,9 @@ function openAuthPrompt() {
 /* ---------------------------- 翻译 ---------------------------- */
 
 /**
- * 两条翻译通道：
- *   1. 浏览器内置 Translator API（Chrome 138+ / Edge）—— 本地模型，不限量，内容不出本机
- *   2. MyMemory 公共接口 —— 无需配置，但 500 字符/次、约 5000 字符/天
- * 结果按「仓库@分支」缓存在 localStorage，翻一次就够。
+ * 六条翻译通道，按 trOrder() 顺序尝试：浏览器内置 Translator API、腾讯、B 站
+ * Index-Translate、Pollinations、自建 LibreTranslate、MyMemory。
+ * 前一条失败或返回空则换下一条；结果按块缓存在 localStorage。
  */
 
 const TR_CACHE = 'ghtr:';
@@ -4781,19 +4780,43 @@ async function translateBlock(text, onTick) {
 }
 
 
-async function translateMarkdown(md, onTick) {
+/**
+ * 分段并发翻译，译好一段就回调一段（onPart 收到当前已拼好的 markdown）。
+ * 浏览器内置模型不保证并发安全，限 1；在线接口限 3。
+ */
+async function translateMarkdown(md, onTick, onPart) {
   const parts = splitMd(md);
-  const texts = parts.filter((p) => !p.code);
-  let idx = 0;
-  const out = [];
+  const idxs = [];
+  parts.forEach((p, i) => { if (!p.code) idxs.push(i); });
+  const total = idxs.length;
+  if (!total) return md;
 
-  for (const p of parts) {
-    if (p.code) { out.push(p.text); continue; }
-    idx++;
-    out.push(await translateBlock(p.text, (a, b) => {
-      if (onTick) onTick(idx, texts.length, a, b);
-    }));
-  }
+  const out = parts.map((p) => p.text);
+  const bt = await getBrowserTranslator();
+  const limit = Math.min(bt ? 1 : 3, total);
+  let cursor = 0;
+  let done = 0;
+  let ok = 0;
+
+  const worker = async () => {
+    while (cursor < total) {
+      const k = cursor++;
+      const i = idxs[k];
+      try {
+        out[i] = await translateBlock(parts[i].text);
+        ok++;
+      } catch (e) {
+        lastTrErr = e;
+        out[i] = parts[i].text;
+      }
+      done++;
+      if (onTick) onTick(done, total);
+      if (onPart) onPart(out.join(''));
+    }
+  };
+
+  await Promise.all(Array.from({ length: limit }, worker));
+  if (!ok) throw (lastTrErr || new Error('翻译接口未返回结果'));
   return out.join('');
 }
 
@@ -4852,11 +4875,23 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
     try {
       const bt = await getBrowserTranslator();
       if (!bt) {
-        toast('当前浏览器无内置翻译模型，改用公共接口：单次 500 字符，每日约 5000 字符', 4500);
+        const names = {
+          tencent: '腾讯翻译', bilibili: 'B 站 Index-Translate', pollinations: 'Pollinations',
+          libre: '自建 LibreTranslate', mymemory: 'MyMemory'
+        };
+        const first = trOrder().filter(c => c !== 'browser')[0];
+        toast('当前浏览器无内置翻译模型，改用在线通道：' + (names[first] || '公共接口'), 4500);
       }
-      const out = await translateMarkdown(original, (a, b) => {
-        btn.textContent = '翻译中 ' + a + '/' + b;
-      });
+      let lastPaint = 0;
+      const out = await translateMarkdown(original,
+        (a, b) => { btn.textContent = '翻译中 ' + a + '/' + b; },
+        (partial) => {
+          // 译好一段先显示一段，未完成的段落保持原文
+          const now = Date.now();
+          if (now - lastPaint < 350) return;
+          lastPaint = now;
+          paint(partial);
+        });
       if (!out || out === original) throw new Error('未产生译文');
       translated = out;
       trCacheSet(cacheKey, out);
@@ -6634,6 +6669,13 @@ async function openSettings() {
     if (!el) return;
     const bt = await getBrowserTranslator();
     const bits = [bt ? '本地模型可用' : '无本地模型'];
+    const names = {
+      auto: '自动', browser: '浏览器本地', tencent: '腾讯翻译',
+      bilibili: 'B 站 Index-Translate', pollinations: 'Pollinations',
+      libre: '自建 LibreTranslate', mymemory: 'MyMemory'
+    };
+    const mode = LS.get('ghl_tr_mode', 'auto');
+    bits.push('优先：' + (names[mode] || '自动'));
     if (LS.get('ghl_translate', '')) bits.push('LibreTranslate 已配置');
     el.textContent = bits.join(' · ');
   };
