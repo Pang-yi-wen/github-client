@@ -699,7 +699,15 @@ const SELF_REPO = { owner: 'Pang-yi-wen', repo: 'github-client', branch: 'main' 
 /** 自动检查的最小间隔；手动检查不受限 */
 const UPD_INTERVAL = 6 * 3600 * 1000;
 
-const updEnabled = () => LS.get('ghl_upd_on', '1') !== '0';
+const updEnabled = () => {
+  // 客户端内用原生持久化开关；网页版用 localStorage
+  try {
+    if (window.Android && typeof window.Android.autoUpdateEnabled === 'function') {
+      return !!window.Android.autoUpdateEnabled();
+    }
+  } catch (_) {}
+  return LS.get('ghl_upd_on', '1') !== '0';
+};
 
 /** 更新源：默认 SELF_REPO，可用 ghl_upd_repo（owner/repo）覆盖，供 fork 使用 */
 function updRepo() {
@@ -765,6 +773,8 @@ function setUpdBadge(ver) {
  */
 async function checkUpdate(force) {
   if (!force && !updEnabled()) return updAvailable;
+  // 客户端内页面与安装包都由原生检查，避免和原生弹窗重复
+  if (!force && window.Android) return updAvailable;
   const last = Number(LS.get('ghl_upd_last', '0') || 0);
   if (!force && Date.now() - last < UPD_INTERVAL) return updAvailable;
   LS.set('ghl_upd_last', String(Date.now()));
@@ -3530,8 +3540,8 @@ async function openSettings() {
           令牌存在浏览器本地，随请求直接发给 GitHub。
         </p>
         <div class="scope-pick">
-          <label class="form-check"><input type="checkbox" id="scPriv"> <span>读取私有仓库 <code>repo</code></span></label>
-          <label class="form-check"><input type="checkbox" id="scUser"> <span>修改账号资料 <code>user</code></span></label>
+          <label class="form-check"><input type="checkbox" id="scPriv" ${LS.get('ghl_sc_priv', '0') === '1' ? 'checked' : ''}> <span>读取私有仓库 <code>repo</code></span></label>
+          <label class="form-check"><input type="checkbox" id="scUser" ${LS.get('ghl_sc_user', '0') === '1' ? 'checked' : ''}> <span>修改账号资料 <code>user</code></span></label>
         </div>
         <div id="scopeHint" class="dim" style="font-size:11.5px;margin:-2px 0 8px"></div>
         <div class="tk-links">
@@ -3764,6 +3774,11 @@ async function openSettings() {
   if (updOn) {
     updOn.addEventListener('change', () => {
       LS.set('ghl_upd_on', updOn.checked ? '1' : '0');
+      try {
+        if (window.Android && typeof window.Android.setAutoUpdate === 'function') {
+          window.Android.setAutoUpdate(updOn.checked);
+        }
+      } catch (_) {}
       toast(updOn.checked ? '已启用自动检查更新' : '已关闭自动检查更新');
     });
   }
@@ -3846,7 +3861,10 @@ async function openSettings() {
   };
   ['scPriv', 'scUser'].forEach(id => {
     const e = $('#' + id);
-    if (e) e.onchange = updScope;
+    if (e) e.onchange = () => {
+      LS.set(id === 'scPriv' ? 'ghl_sc_priv' : 'ghl_sc_user', e.checked ? '1' : '0');
+      updScope();
+    };
   });
   updScope();
 

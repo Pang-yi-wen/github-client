@@ -699,7 +699,19 @@ public class MainActivity extends Activity {
      * 启动时统一检查：先看页面，页面无需更新再看安装包。
      * 串行执行，避免两个检查并发各自弹窗；boot.html 的加载不触发。
      */
+    /** 自动检查更新开关（持久化，默认开启） */
+    @JavascriptInterface
+    public boolean autoUpdateEnabled() {
+        return getSharedPreferences(PREF, MODE_PRIVATE).getBoolean("auto_update", true);
+    }
+
+    @JavascriptInterface
+    public void setAutoUpdate(boolean on) {
+        getSharedPreferences(PREF, MODE_PRIVATE).edit().putBoolean("auto_update", on).apply();
+    }
+
     private void runUpdateChecks() {
+        if (!autoUpdateEnabled()) return;
         if (updateChecksStarted) return;
         updateChecksStarted = true;
         new Thread(() -> {

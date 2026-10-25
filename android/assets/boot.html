@@ -3,9 +3,7 @@
 <head>
 <meta charset="utf-8">
 <script>
-// APK 内置版关闭自动更新：版本随安装包分发，更新方式为重新出包。
-// 先于 index.html 执行，因此应用启动时的检查会读到已关闭。
-try { localStorage.setItem('ghl_upd_on', '0'); } catch (e) {}
+// 自动更新开关由原生持久化（SharedPreferences），这里只负责跳到主页面
 location.replace('index.html');
 </script>
 </head>
