@@ -1445,3 +1445,6 @@ mark {
   background: var(--bg-inset); display: block;
 }
 .guide-dots span.on { background: var(--accent); }
+
+/* ---------- 安装包多通道下载 ---------- */
+.apk-chans { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }

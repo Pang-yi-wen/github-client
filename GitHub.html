@@ -1457,6 +1457,9 @@ mark {
 }
 .guide-dots span.on { background: var(--accent); }
 
+/* ---------- 安装包多通道下载 ---------- */
+.apk-chans { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
 
 /* ---- syntax: dark ---- */
 
@@ -2756,7 +2759,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.15';
+const APP_VERSION = '1.0.16';
 'use strict';
 
 /* ============================================================
@@ -3565,9 +3568,10 @@ async function applyUpdate() {
     } catch (_) {}
   }
   if (window.Android) {
-    // 旧安装包没有 updatePage；WebView 里 <a download> 不会落盘，不能假装下载成功
-    toast('当前安装包不含页面更新接口，请先在设置里更新安装包', 6000);
+    // 旧安装包没有 updatePage；WebView 里 <a download> 不会落盘，改用手动下载安装包
+    toast('当前安装包不含页面更新接口，请先下载安装包', 6000);
     if (btn) { btn.disabled = false; btn.textContent = label; }
+    openApkDownloadDialog();
     return;
   }
 
@@ -3602,13 +3606,76 @@ async function applyUpdate() {
 
 /** 读取安装包版本清单，用于在设置里区分“页面版本”和“安装包版本” */
 async function fetchApkMeta() {
-  const { owner, repo, branch } = updRepo();
+  const { owner, repo, branch } = SELF_REPO;   // 安装包固定来自本客户端仓库
   const seg = owner + '/' + repo + '/' + branch + '/android/apk/version.json';
   const txt = await fetchFirst(seg, t => {
     try { const j = JSON.parse(t); return !!(j && j.versionName); } catch (_) { return false; }
   }, 10000);
   if (!txt) return null;
   try { return JSON.parse(txt); } catch (_) { return null; }
+}
+
+/** 安装包是多通道可下的公开文件（文件名带版本号，内容不变），可放心走 CDN */
+function apkDownloadChannels(apkName) {
+  const { owner, repo, branch } = SELF_REPO;
+  const raw = 'https://raw.githubusercontent.com/' + owner + '/' + repo + '/' + branch + '/android/apk/' + apkName;
+  return [
+    { label: 'jsDelivr CDN', url: 'https://cdn.jsdelivr.net/gh/' + owner + '/' + repo + '@' + branch + '/android/apk/' + apkName },
+    { label: 'ghproxy.net', url: 'https://ghproxy.net/' + raw },
+    { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + raw },
+    { label: 'ghfast.top', url: 'https://ghfast.top/' + raw },
+    { label: '直连 raw', url: raw }
+  ];
+}
+
+/**
+ * 手动下载安装包：不依赖原生桥，列出多个通道，交给系统浏览器下载。
+ * 用于旧壳（没有 updatePage / checkApkUpdate 接口）或自动提示被跳过的情况。
+ */
+async function openApkDownloadDialog() {
+  const mask = $('#modal');
+  if (!mask || !mask.hidden) return;
+  const sv = (window.Android && window.Android.shellVersion) ? (window.Android.shellVersion() || '') : '';
+  mask.hidden = false;
+  mask.innerHTML = '<div class="modal-card"><h3>下载安装包</h3><p class="hint">正在读取版本清单…</p></div>';
+  const close = () => { mask.hidden = true; mask.innerHTML = ''; mask.onclick = null; };
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+
+  let meta = null;
+  try { meta = await fetchApkMeta(); } catch (_) {}
+  if (!meta || !meta.apk) {
+    mask.innerHTML = '<div class="modal-card"><h3>下载安装包</h3>'
+      + '<p class="hint">读取版本清单失败，请检查网络后重试。</p>'
+      + '<div class="modal-actions"><button class="btn sm" id="apkClose">关闭</button></div></div>';
+    $('#apkClose').onclick = close;
+    return;
+  }
+  const upToDate = sv && cmpVer(sv, meta.versionName) >= 0;
+  const chans = apkDownloadChannels(meta.apk);
+  mask.innerHTML = `
+    <div class="modal-card">
+      <h3>下载安装包 ${esc(meta.versionName)}</h3>
+      <p class="hint">${upToDate
+        ? '当前安装包 ' + esc(sv) + '，已是最新。仍可重新下载。'
+        : '当前安装包 ' + (esc(sv) || '未知') + '，可升级到 ' + esc(meta.versionName) +
+          '。选一个通道，用系统浏览器下载后安装（覆盖安装，无需卸载）。'}</p>
+      <div class="apk-chans">
+        ${chans.map((c, i) => `<button class="btn sm" data-ch="${i}">${esc(c.label)}</button>`).join('')}
+      </div>
+      <div class="modal-actions" style="margin-top:12px">
+        <span class="dim" style="font-size:11.5px">文件：${esc(meta.apk)}</span>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" id="apkClose">关闭</button>
+      </div>
+    </div>`;
+  mask.querySelectorAll('[data-ch]').forEach(b => {
+    b.onclick = () => {
+      const u = chans[Number(b.dataset.ch)].url;
+      if (window.Android) location.href = u;          // 触发系统浏览器
+      else window.open(u, '_blank', 'noopener');
+    };
+  });
+  $('#apkClose').onclick = close;
 }
 
 /* ---------------------------- Markdown ---------------------------- */
@@ -6348,6 +6415,7 @@ async function openSettings() {
         <div class="modal-actions">
           <span class="dim" id="updStatus" style="font-size:11.5px"></span>
           <span class="spacer"></span>
+          <button class="btn sm ghost" id="apkDl">下载安装包</button>
           <button class="btn sm" id="updCheck">检查更新</button>
         </div>
       </div>
@@ -6508,6 +6576,15 @@ async function openSettings() {
       if (window.Android && typeof window.Android.checkApkUpdate === 'function') window.Android.checkApkUpdate();
     } catch (_) {}
   });
+
+  // 不依赖原生桥：列出多个通道，交给系统浏览器下载安装包
+  const apkDl = $('#apkDl');
+  if (apkDl) apkDl.onclick = () => {
+    const m = $('#modal');
+    m.hidden = true;
+    m.innerHTML = '';
+    openApkDownloadDialog();
+  };
 
   $('#tkClear').addEventListener('click', () => {
     saveToken('');
