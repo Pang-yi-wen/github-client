@@ -593,8 +593,9 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
+.form-check label,
+label.form-check { display: inline-flex; align-items: center; gap: 6px; }
 .form-check input { accent-color: var(--accent); }
-.form-check label { display: inline-flex; align-items: center; gap: 6px; }
 
 .drop-zone {
   border: 1px dashed var(--border);
@@ -740,6 +741,8 @@ main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 100px; }
   font-family: inherit;
   outline: none;
   min-width: 84px;
+  width: auto;
+  margin-bottom: 0;
 }
 .filt select { cursor: pointer; padding-right: 4px; }
 .filt input { min-width: 130px; font-family: ui-monospace, monospace; font-size: 12px; }
