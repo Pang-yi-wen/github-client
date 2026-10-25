@@ -926,6 +926,64 @@ async function openApkDownloadDialog() {
   $('#apkClose').onclick = close;
 }
 
+/* ------------------------- 发行版附件下载 ------------------------- */
+
+/** 发行版附件/源码包的可用通道（实测：ghfast.top、gh-proxy.org 可用；ghproxy.com 已失效） */
+function releaseChannels(url, kind) {
+  const list = [];
+  if (kind === 'zip') {
+    // codeload 只有 gh-proxy.org 能转发，其余代理返回 403
+    list.push({ label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + url });
+  } else {
+    list.push({ label: 'ghfast.top', url: 'https://ghfast.top/' + url });
+    list.push({ label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + url });
+    list.push({ label: 'ghproxy.net', url: 'https://ghproxy.net/' + url });
+  }
+  list.push({ label: '直连（可能较慢）', url: url });
+  return list;
+}
+
+/**
+ * 发行版附件下载：先选通道，再交给系统下载器（后台、通知栏进度、断点续传）。
+ * 几十 MB 的文件不要走浏览器直连——objects.githubusercontent.com 在国内通常很慢。
+ */
+function openAssetDownloadDialog(name, size, url, kind) {
+  const mask = $('#modal');
+  if (!mask || !mask.hidden) return;
+  const chans = releaseChannels(url, kind);
+  const useNative = !!(window.Android && typeof window.Android.downloadFile === 'function');
+  mask.hidden = false;
+  mask.innerHTML = `
+    <div class="modal-card">
+      <h3>下载 ${esc(name)}</h3>
+      <p class="hint">${size ? '大小 ' + fmtSize(size) + '。' : ''}${
+        useNative ? '选一个通道后交给系统下载器：后台下载、通知栏显示进度、支持断点续传。'
+                  : '选一个通道后在浏览器中下载。'}</p>
+      <div class="apk-chans">
+        ${chans.map((c, i) => `<button class="btn sm" data-ch="${i}">${esc(c.label)}</button>`).join('')}
+      </div>
+      <div class="modal-actions" style="margin-top:12px">
+        <span class="dim" style="font-size:11px;word-break:break-all">${esc(url)}</span>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" id="asClose">关闭</button>
+      </div>
+    </div>`;
+  const close = () => { mask.hidden = true; mask.innerHTML = ''; mask.onclick = null; };
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+  $('#asClose').onclick = close;
+  mask.querySelectorAll('[data-ch]').forEach(b => {
+    b.onclick = () => {
+      const u = chans[Number(b.dataset.ch)].url;
+      close();
+      if (useNative) {
+        try { window.Android.downloadFile(u, name); toast('已交给系统下载器：' + name, 5000); return; } catch (_) {}
+      }
+      if (window.Android) location.href = u;
+      else window.open(u, '_blank', 'noopener');
+    };
+  });
+}
+
 /* ---------------------------- Markdown ---------------------------- */
 
 const mdRenderer = new marked.Renderer();
@@ -2732,13 +2790,16 @@ async function viewReleases(o, r) {
             <span class="spacer"></span>
             <span class="dim">${fmtDate(rel.published_at)}</span>
             <a class="btn sm ghost" href="${link(o, r, 'tree', rel.tag_name, '')}">浏览代码</a>
-            <a class="btn sm primary" href="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(rel.tag_name)}">${ICON.download} ZIP</a>
+            <button type="button" class="btn sm primary rel-zip"
+              data-url="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(rel.tag_name)}"
+              data-name="${esc(o + '-' + r + '-' + rel.tag_name + '.zip')}">${ICON.download} ZIP</button>
             ${canWrite() ? `<button type="button" class="btn sm ghost rel-del" data-id="${rel.id}" data-name="${esc(rel.name || rel.tag_name)}">删除</button>` : ''}
           </div>
           ${rel.body ? `<div class="rel-body markdown-body">${renderMarkdown(rel.body, ctx).innerHTML}</div>` : ''}
           ${(rel.assets || []).length ? `<div class="rel-assets">
-            ${rel.assets.map(a => `<a class="asset" href="${esc(a.browser_download_url)}" target="_blank" rel="noopener">
-              ${ICON.download} ${esc(a.name)} <span class="dim">${fmtSize(a.size)} · ${fmtNum(a.download_count)} 次</span></a>`).join('')}
+            ${rel.assets.map(a => `<button type="button" class="asset" data-asset
+              data-url="${esc(a.browser_download_url)}" data-name="${esc(a.name)}" data-size="${a.size || 0}">
+              ${ICON.download} ${esc(a.name)} <span class="dim">${fmtSize(a.size)} · ${fmtNum(a.download_count)} 次</span></button>`).join('')}
           </div>` : ''}
         </div>`).join('') : '<div class="empty">暂无发行版</div>'}
     </div>`;
@@ -2749,6 +2810,16 @@ async function viewReleases(o, r) {
   }
   app.querySelectorAll('.rel-del').forEach((b) => {
     b.addEventListener('click', () => deleteRelease(o, r, b.getAttribute('data-id'), b.getAttribute('data-name'), b));
+  });
+  app.querySelectorAll('[data-asset]').forEach((b) => {
+    b.addEventListener('click', () => {
+      openAssetDownloadDialog(b.dataset.name, Number(b.dataset.size) || 0, b.dataset.url, 'asset');
+    });
+  });
+  app.querySelectorAll('.rel-zip').forEach((b) => {
+    b.addEventListener('click', () => {
+      openAssetDownloadDialog(b.dataset.name, 0, b.dataset.url, 'zip');
+    });
   });
 }
 

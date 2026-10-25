@@ -1146,6 +1146,10 @@ mark {
   max-width: 100%;
 }
 .asset:hover { background: var(--bg-hover); text-decoration: none; }
+button.asset {
+  background: transparent; color: inherit; font-family: inherit;
+  cursor: pointer; text-align: left;
+}
 
 /* ---------- 用户 ---------- */
 
