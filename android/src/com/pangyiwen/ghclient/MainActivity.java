@@ -367,6 +367,9 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (apkDialogShowing) return;
                 apkDialogShowing = true;
+                // 弹过即记为已提示：自动检查对同一版本只弹一次，彻底避免重复弹窗；
+                // 若下载/安装失败，可在设置里点「检查更新」手动重试（手动不受此限制）
+                markApkSeen(remoteCode);
                 new AlertDialog.Builder(this)
                     .setTitle("安装包有新版本 " + remoteName)
                     .setMessage("当前安装包 " + (cur.isEmpty() ? "未知" : cur) + "，是否下载并安装？")

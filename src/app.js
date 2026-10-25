@@ -3421,6 +3421,7 @@ async function openSettings() {
           发现新版本时顶栏显示箭头，点击即更新。http(s) 页面直接热替换；本地 file:// 页面则下载新文件，
           替换原文件后重新打开。
         </p>
+        <p class="hint" id="updShellHint" style="display:none;color:var(--yellow);margin:-2px 0 10px"></p>
         <label class="form-check" style="margin-bottom:10px">
           <input type="checkbox" id="updOn" ${updEnabled() ? 'checked' : ''}>
           <span>启用自动检查（默认开启）</span>
@@ -3514,6 +3515,18 @@ async function openSettings() {
 
   const updVer = $('#updVer');
   if (updVer) updVer.textContent = APP_VERSION;
+
+  // 页面热更不会替换安装包；安装包落后时说明为什么还会提示更新
+  const shellHint = $('#updShellHint');
+  if (shellHint) {
+    let sv = '';
+    try { if (window.Android && window.Android.shellVersion) sv = window.Android.shellVersion() || ''; } catch (_) {}
+    if (sv && cmpVer(sv, APP_VERSION) < 0) {
+      shellHint.style.display = '';
+      shellHint.innerHTML = '安装包 ' + esc(sv) + ' 落后于页面 ' + esc(APP_VERSION) +
+        '。更新提示针对安装包，点下方「检查更新」下载并安装。';
+    }
+  }
 
   const refreshUpdStatus = () => {
     const el = $('#updStatus');
