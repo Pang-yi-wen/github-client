@@ -1292,12 +1292,15 @@ async function viewHome() {
 }
 
 function authBanner() {
-  return `<div class="auth-banner">
-    <div>
-      <b>${ICON.key} 未设置访问令牌</b>
-      <span>匿名调用每小时只有 60 次，浏览几个仓库就会耗尽。填入 GitHub Token 后提升到 5000 次。</span>
+  return `<div class="empty-state">
+    <h3>开始使用</h3>
+    <p class="hint">未登录时可以浏览公开内容，匿名调用每小时 60 次；填入令牌后提升到 5000 次/小时，并能查看自己的仓库与收藏。</p>
+    <div class="empty-actions">
+      <button class="btn primary" id="esBrowse">浏览公开仓库</button>
+      <button class="btn" id="openToken">设置令牌</button>
+      <button class="btn ghost" id="esSignup">注册账号</button>
     </div>
-    <button class="btn primary" id="openToken">设置令牌</button>
+    <button class="link-btn" id="esGuide">查看 3 步新手指引 →</button>
   </div>`;
 }
 
@@ -1306,6 +1309,82 @@ function bindAuthBanner() {
   if (b) b.addEventListener('click', openSettings);
   const clip = $('#fromClip');
   if (clip) clip.addEventListener('click', openFromClipboard);
+  const browse = $('#esBrowse');
+  if (browse) browse.addEventListener('click', () => { location.hash = link('microsoft', 'vscode'); });
+  const signup = $('#esSignup');
+  if (signup) signup.addEventListener('click', () => openWebPage('https://github.com/signup'));
+  const guide = $('#esGuide');
+  if (guide) guide.addEventListener('click', () => openGuide(0));
+}
+
+/* ---------------------------- 新手指引 ---------------------------- */
+
+let guideOpen = false;
+
+const GUIDE = [
+  {
+    t: '设置访问令牌',
+    d: '令牌决定配额与权限。只读公开内容勾 public_repo；看私有仓库加 repo；改账号资料加 user。令牌只保存在本机，请求时直接发给 GitHub。',
+    btn: '去设置令牌',
+    act: (close) => { close(); openSettings(); }
+  },
+  {
+    t: '打开一个仓库',
+    d: '仓库页可以查看文件、提交、Issues 与 Releases。先用一个公开仓库熟悉结构，左侧文件树可以直接进入子目录。',
+    btn: '打开 microsoft/vscode',
+    act: (close) => { close(); location.hash = link('microsoft', 'vscode'); }
+  },
+  {
+    t: '搜索与下载',
+    d: '顶部搜索支持类型与条件组合；「通路与下载」里可以下载单个文件，并查看下载位置与下载记录。',
+    btn: '打开搜索',
+    act: (close) => { close(); openSearchPanel({ q: '' }); }
+  }
+];
+
+function openGuide(step) {
+  const mask = $('#modal');
+  if (!mask) return;
+  if (!mask.hidden && !guideOpen) return;   // 其它弹窗占用时不抢
+  step = Math.max(0, Math.min(GUIDE.length - 1, step || 0));
+  const g = GUIDE[step];
+  guideOpen = true;
+  mask.hidden = false;
+  mask.innerHTML = `
+    <div class="modal-card">
+      <div class="guide-dots">${GUIDE.map((_, i) => `<span class="${i === step ? 'on' : ''}"></span>`).join('')}</div>
+      <h3>${step + 1}. ${esc(g.t)}</h3>
+      <p class="hint">${esc(g.d)}</p>
+      <div class="modal-actions">
+        <button class="btn ghost sm" id="gdSkip">跳过</button>
+        <span class="spacer"></span>
+        ${step > 0 ? '<button class="btn sm ghost" id="gdPrev">上一步</button>' : ''}
+        ${step < GUIDE.length - 1
+          ? '<button class="btn sm" id="gdNext">下一步</button>'
+          : '<button class="btn sm ghost" id="gdDone">完成</button>'}
+        <button class="btn primary sm" id="gdAct">${esc(g.btn)}</button>
+      </div>
+    </div>`;
+  const close = () => {
+    guideOpen = false;
+    mask.hidden = true;
+    mask.innerHTML = '';
+    mask.onclick = null;
+    LS.set('ghl_guide_done', '1');
+  };
+  $('#gdSkip').onclick = close;
+  $('#gdDone').onclick = close;
+  if ($('#gdPrev')) $('#gdPrev').onclick = () => openGuide(step - 1);
+  if ($('#gdNext')) $('#gdNext').onclick = () => openGuide(step + 1);
+  $('#gdAct').onclick = () => g.act(close);
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+}
+
+/** 首次进入先走三步引导；已看过则按 24 小时冷却提示令牌 */
+function maybeOnboard() {
+  if (LS.get('ghl_guide_done', '') === '1') { maybePromptAuth(); return; }
+  if (TOKEN) { LS.set('ghl_guide_done', '1'); return; }   // 已登录的老用户不打扰
+  setTimeout(() => openGuide(0), 900);
 }
 
 /* ---------------------------- 未登录引导 ---------------------------- */
@@ -3358,19 +3437,25 @@ async function openSettings() {
           匿名调用每小时 60 次，浏览几个仓库就会耗尽；填入令牌后为 5000 次。
           令牌存在浏览器本地，随请求直接发给 GitHub。
         </p>
+        <div class="scope-pick">
+          <label class="form-check"><input type="checkbox" id="scPriv"> <span>读取私有仓库 <code>repo</code></span></label>
+          <label class="form-check"><input type="checkbox" id="scUser"> <span>修改账号资料 <code>user</code></span></label>
+        </div>
+        <div id="scopeHint" class="dim" style="font-size:11.5px;margin:-2px 0 8px"></div>
         <div class="tk-links">
           <a class="btn sm" id="tkGen"
-             href="https://github.com/settings/tokens/new?scopes=user,public_repo,read:org&description=GitHub%20Web%20Client"
+             href="https://github.com/settings/tokens/new?scopes=public_repo&description=GitHub%20Web%20Client"
              target="_blank" rel="noopener">去 GitHub 生成令牌 ↗</a>
           <button class="btn sm ghost" id="tkCmd" title="复制 gh 命令">复制 gh 命令</button>
         </div>
         <p class="hint" style="font-size:11.5px;margin-top:8px">
-          只需要读公开内容的话勾 <code>public_repo</code> 就够；要看私有仓库再加 <code>repo</code>；要在客户端内改资料再勾 <code>user</code>。
+          勾选上面的用途后点「去 GitHub 生成令牌」，链接会自动带上对应作用域。
           若链接打不开，说明 github.com 在当前网络不可达；装了 gh CLI 的话，在终端跑 <code>gh auth token</code> 可直接取出已有令牌。
         </p>
         <input id="tk" type="password" placeholder="ghp_… 或 github_pat_…" value="${esc(TOKEN)}" spellcheck="false">
         <div class="modal-actions">
           <button class="btn ghost sm" id="tkClear">清除</button>
+          <button class="btn ghost sm" id="guideOpen">新手引导</button>
           <span class="spacer"></span>
           <button class="btn primary sm" id="tkSave">保存令牌</button>
         </div>
@@ -3628,9 +3713,29 @@ async function openSettings() {
 
   $('#tkCmd').addEventListener('click', () => copyText('gh auth token'));
 
+  // 作用域勾选：public_repo 为只读基础，repo 覆盖私有仓库，user 用于改资料
+  const scopeList = () => {
+    const sc = [];
+    if ($('#scUser') && $('#scUser').checked) sc.push('user');
+    if ($('#scPriv') && $('#scPriv').checked) sc.push('repo');
+    else sc.push('public_repo');
+    return sc;
+  };
+  const updScope = () => {
+    const el = $('#scopeHint');
+    if (el) el.textContent = '将申请：' + scopeList().join('、');
+  };
+  ['scPriv', 'scUser'].forEach(id => {
+    const e = $('#' + id);
+    if (e) e.onchange = updScope;
+  });
+  updScope();
+
   $('#tkGen').addEventListener('click', (e) => {
     e.preventDefault();
-    openWebPage('https://github.com/settings/tokens/new?scopes=user,public_repo,read:org&description=GitHub%20Web%20Client');
+    const url = 'https://github.com/settings/tokens/new?scopes=' + scopeList().join(',') +
+      '&description=GitHub%20Web%20Client';
+    openWebPage(url);
     toast('已在客户端内打开；若一直空白，说明 github.com 在当前网络不可达', 5000);
   });
 
@@ -3652,6 +3757,14 @@ async function openSettings() {
       $('#tkStatus').innerHTML = '<span style="color:var(--red)">' + esc(e.message) + '</span>';
     }
   });
+
+  const guideBtn = $('#guideOpen');
+  if (guideBtn) guideBtn.onclick = () => {
+    const m = $('#modal');
+    m.hidden = true;
+    m.innerHTML = '';
+    openGuide(0);
+  };
 
   renderAccount();
 
@@ -4802,7 +4915,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#upd').addEventListener('click', applyUpdate);
   if (!location.hash) location.hash = '#/';
   route();
-  maybePromptAuth();
+  maybeOnboard();
   checkUpdate();
   ensureChannels();
 });
