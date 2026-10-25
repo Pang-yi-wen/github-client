@@ -1452,3 +1452,6 @@ button.asset {
 
 /* ---------- 安装包多通道下载 ---------- */
 .apk-chans { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+/* ---------- 大段文字翻译按钮 ---------- */
+.tr-head { display: flex; justify-content: flex-end; margin: 2px 0 6px; }

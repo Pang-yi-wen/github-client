@@ -1464,6 +1464,9 @@ button.asset {
 /* ---------- 安装包多通道下载 ---------- */
 .apk-chans { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
+/* ---------- 大段文字翻译按钮 ---------- */
+.tr-head { display: flex; justify-content: flex-end; margin: 2px 0 6px; }
+
 
 /* ---- syntax: dark ---- */
 
@@ -2763,7 +2766,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.20';
+const APP_VERSION = '1.0.22';
 'use strict';
 
 /* ============================================================
@@ -4504,6 +4507,32 @@ async function tencentTranslate(list) {
   return out;
 }
 
+/** B 站 Index-Translate：OpenAI 兼容接口，免密钥，单条可处理长文本 */
+async function bilibiliTranslate(text) {
+  const res = await fetch('https://index-translate.bilibili.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer index'
+    },
+    body: JSON.stringify({
+      model: 'Index-Translate-35B-A3B',
+      messages: [
+        { role: 'system', content: '你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。' },
+        { role: 'user', content: text }
+      ],
+      temperature: 0,
+      stream: false
+    })
+  });
+  if (res.status === 429) throw new Error('B站翻译限流');
+  if (!res.ok) throw new Error('B站翻译 HTTP ' + res.status);
+  const j = await res.json();
+  const out = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+  if (!out) throw new Error('B站翻译无返回');
+  return String(out).trim();
+}
+
 /** Pollinations：免密钥的文本生成接口，用作翻译通道。慢，适合兜底 */
 async function pollinationsTranslate(text) {
   const q = 'Translate the following English text into Simplified Chinese. ' +
@@ -4540,12 +4569,13 @@ let lastTrErr = null;
 
 /** 通道顺序：选定的提到最前，其余仍作兜底 */
 const TR_MODES = {
-  auto: ['browser', 'tencent', 'pollinations', 'libre', 'mymemory'],
-  browser: ['browser', 'tencent', 'pollinations', 'libre', 'mymemory'],
-  tencent: ['tencent', 'browser', 'pollinations', 'libre', 'mymemory'],
-  pollinations: ['pollinations', 'tencent', 'browser', 'libre', 'mymemory'],
-  libre: ['libre', 'tencent', 'browser', 'pollinations', 'mymemory'],
-  mymemory: ['mymemory', 'tencent', 'browser', 'pollinations', 'libre']
+  auto: ['browser', 'tencent', 'bilibili', 'pollinations', 'libre', 'mymemory'],
+  browser: ['browser', 'tencent', 'bilibili', 'pollinations', 'libre', 'mymemory'],
+  tencent: ['tencent', 'bilibili', 'browser', 'pollinations', 'libre', 'mymemory'],
+  bilibili: ['bilibili', 'tencent', 'browser', 'pollinations', 'libre', 'mymemory'],
+  pollinations: ['pollinations', 'tencent', 'bilibili', 'browser', 'libre', 'mymemory'],
+  libre: ['libre', 'tencent', 'bilibili', 'browser', 'pollinations', 'mymemory'],
+  mymemory: ['mymemory', 'tencent', 'bilibili', 'browser', 'pollinations', 'libre']
 };
 
 function trOrder() {
@@ -4567,6 +4597,12 @@ async function viaChannel(ch, list) {
   }
 
   if (ch === 'tencent') return tencentTranslate(list);
+
+  if (ch === 'bilibili') {
+    const out = [];
+    for (const s of list) out.push(await bilibiliTranslate(s));
+    return out;
+  }
 
   if (ch === 'pollinations') {
     const out = [];
@@ -4778,7 +4814,7 @@ function trCacheSet(key, val) {
 }
 
 /**
- * 给 README 面板挂上翻译开关。
+ * 给 markdown 块挂上翻译开关（README / issue / 评论 / Release）。
  * original：原文 markdown；bodyEl：渲染容器；render：把 markdown 变 HTML 的方法
  */
 function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
@@ -4834,6 +4870,30 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       label();
     }
   });
+}
+
+/** 文本块达到这个规模才挂翻译按钮，避免短句也冒按钮 */
+const TR_BLOCK_MIN = 400;
+
+/**
+ * 给任意 markdown 块挂翻译按钮：README / issue 与 PR 正文 / 评论 / Release 说明。
+ * 容器必须是 markdown 渲染出来的元素，bindTranslate 会用同样的 ctx 重绘。
+ */
+function attachBlockTranslate(container, text, ctx, cacheKey) {
+  if (!container || !text) return;
+  const t = String(text).trim();
+  if (t.length < TR_BLOCK_MIN && t.split('\n').length < 12) return;
+  if (container.dataset.trBound === '1') return;
+  container.dataset.trBound = '1';
+  const head = document.createElement('div');
+  head.className = 'tr-head';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn sm ghost';
+  btn.textContent = '译成中文';
+  head.appendChild(btn);
+  container.parentNode.insertBefore(head, container);
+  bindTranslate(btn, container, text, ctx, cacheKey);
 }
 
 /* ---------------------------- 仓库概览 ---------------------------- */
@@ -5511,15 +5571,20 @@ async function viewIssue(o, r, n, isPR) {
       <div class="t-avatar">${avatar(issue.user ? issue.user.avatar_url : '', 32)}</div>
       <div class="t-body">
         <div class="t-head"><b>${esc(issue.user ? issue.user.login : '?')}</b> 发表于 ${fmtDate(issue.created_at)}</div>
-        <div class="t-content markdown-body">${renderMarkdown(issue.body || '_（无正文）_', ctx).innerHTML}</div>
+        <div class="t-content markdown-body" id="issueBody">${renderMarkdown(issue.body || '_（无正文）_', ctx).innerHTML}</div>
       </div>
     </div>
     ${commentsHtml}${filesPanel}
     ${issueWriteBox(issue, n)}`;
 
+  attachBlockTranslate($('#issueBody'), issue.body || '', ctx, 'issue:' + o + '/' + r + '#' + n);
+
   comments.forEach((c, i) => {
     const el = app.querySelector('[data-cmt="' + i + '"]');
-    if (el) el.innerHTML = renderMarkdown(c.body || '', ctx).innerHTML;
+    if (el) {
+      el.innerHTML = renderMarkdown(c.body || '', ctx).innerHTML;
+      attachBlockTranslate(el, c.body || '', ctx, 'cmt:' + (c.id || o + '/' + r + '#' + n + ':' + i));
+    }
   });
   bindFileRows();
   bindIssueWrite(o, r, n, issue);
@@ -5561,7 +5626,7 @@ async function viewReleases(o, r) {
               data-name="${esc(o + '-' + r + '-' + rel.tag_name + '.zip')}">${ICON.download} ZIP</button>
             ${canWrite() ? `<button type="button" class="btn sm ghost rel-del" data-id="${rel.id}" data-name="${esc(rel.name || rel.tag_name)}">删除</button>` : ''}
           </div>
-          ${rel.body ? `<div class="rel-body markdown-body">${renderMarkdown(rel.body, ctx).innerHTML}</div>` : ''}
+          ${rel.body ? `<div class="rel-body markdown-body" data-rel="${rel.id}">${renderMarkdown(rel.body, ctx).innerHTML}</div>` : ''}
           ${(rel.assets || []).length ? `<div class="rel-assets">
             ${rel.assets.map(a => `<button type="button" class="asset" data-asset
               data-url="${esc(a.browser_download_url)}" data-name="${esc(a.name)}" data-size="${a.size || 0}">
@@ -5569,6 +5634,15 @@ async function viewReleases(o, r) {
           </div>` : ''}
         </div>`).join('') : '<div class="empty">暂无发行版</div>'}
     </div>`;
+
+  rels.forEach((rel) => {
+    const el = app.querySelector('[data-rel="' + rel.id + '"]');
+    if (el) {
+      attachBlockTranslate(el, rel.body || '',
+        { owner: o, repo: r, ref: rel.tag_name || repo.default_branch, baseDir: '' },
+        'rel:' + rel.id);
+    }
+  });
 
   const nrel = $('#newRel');
   if (nrel) {
@@ -6455,7 +6529,7 @@ async function openSettings() {
       <div class="set-block">
         <h4>翻译</h4>
         <p class="hint" style="margin-bottom:10px">
-          英文介绍会显示「译成中文」按钮。五个通道按顺序尝试，前一个失败自动换下一个；
+          大段文字会显示「译成中文」按钮。六个通道按顺序尝试，前一个失败自动换下一个；
           选定的通道提到最前，其余仍作兜底。
         </p>
 
@@ -6465,6 +6539,7 @@ async function openSettings() {
             <option value="auto">自动（本地模型优先）</option>
             <option value="browser">浏览器本地模型</option>
             <option value="tencent">腾讯翻译</option>
+            <option value="bilibili">B 站 Index-Translate</option>
             <option value="pollinations">Pollinations</option>
             <option value="libre">自建 LibreTranslate</option>
             <option value="mymemory">MyMemory</option>
