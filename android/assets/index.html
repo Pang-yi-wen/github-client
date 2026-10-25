@@ -2766,7 +2766,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.24';
+const APP_VERSION = '1.0.25';
 'use strict';
 
 /* ============================================================
@@ -4127,6 +4127,15 @@ function repoHeader(repo, tab, srcUrl) {
     </div>
     ${srcLink(srcUrl)}
     ${writeBlock(o, r, repo)}
+    <div class="repo-actions">
+      <button type="button" class="btn sm ${favHas(o, r) ? 'primary' : 'ghost'}" data-fav
+        data-fav-o="${esc(o)}" data-fav-r="${esc(r)}"
+        data-fav-desc="${esc(repo.description || '')}"
+        data-fav-lang="${esc(repo.language || '')}"
+        data-fav-stars="${repo.stargazers_count || 0}"
+        data-fav-avatar="${esc((repo.owner && repo.owner.avatar_url) || '')}">${favHas(o, r) ? '★ 已本地收藏' : '☆ 本地收藏'}</button>
+      <span class="dim" style="font-size:11.5px">仅本机，不写 GitHub</span>
+    </div>
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -6186,14 +6195,89 @@ async function viewSearch(q, type, params) {
   bindSearchFilters();
 }
 
+/* ---------------------------- 本地收藏（仅本机） ---------------------------- */
+
+const FAV_KEY = 'ghl_fav';
+
+function favList() {
+  try {
+    const a = JSON.parse(localStorage.getItem(FAV_KEY) || '[]');
+    return Array.isArray(a) ? a.filter((x) => x && x.o && x.r) : [];
+  } catch (_) { return []; }
+}
+
+function favSave(list) {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(list.slice(0, 500))); } catch (_) {}
+}
+
+function favHas(o, r) {
+  return favList().some((x) => x.o === o && x.r === r);
+}
+
+function favToggle(o, r, meta) {
+  const list = favList();
+  const i = list.findIndex((x) => x.o === o && x.r === r);
+  if (i >= 0) {
+    list.splice(i, 1);
+    favSave(list);
+    return false;
+  }
+  list.unshift(Object.assign({ o, r, t: Date.now() }, meta || {}));
+  favSave(list);
+  return true;
+}
+
+function favRemove(o, r) {
+  favSave(favList().filter((x) => !(x.o === o && x.r === r)));
+}
+
+function toggleLocalFav(o, r, meta, btn) {
+  const on = favToggle(o, r, meta);
+  if (btn) {
+    btn.textContent = on ? '★ 已本地收藏' : '☆ 本地收藏';
+    btn.classList.toggle('primary', on);
+    btn.classList.toggle('ghost', !on);
+  }
+  toast(on ? '已加入本地收藏（仅本机可见）' : '已取消本地收藏');
+}
+
 /* ---------------------------- 我的 ---------------------------- */
 
 async function viewMe() {
   loading();
+  const favs = favList();
+  const favPanel = `<div class="panel">
+      <div class="panel-head">本地收藏 · ${favs.length}
+        <span class="spacer"></span>
+        <span class="dim" style="font-size:11.5px">仅本机可见，不写 GitHub</span>
+      </div>
+      ${favs.length ? favs.map((f) => `<div class="file-row" data-href="${link(f.o, f.r)}">
+          ${ICON.folder}
+          <span class="fname-wrap">
+            <span class="fname">${esc(f.o)} / ${esc(f.r)}</span>
+            ${f.desc ? `<span class="fmsg">${esc(f.desc)}</span>` : ''}
+          </span>
+          <span class="fsize">${f.lang ? esc(f.lang) : ''}</span>
+          <button type="button" class="btn sm ghost" data-fav-rm-o="${esc(f.o)}" data-fav-rm-r="${esc(f.r)}">移除</button>
+        </div>`).join('') : '<div class="empty">还没有本地收藏。仓库页点「☆ 本地收藏」即可加入，仅存本机。</div>'}
+    </div>`;
+  const bindFav = () => {
+    bindFileRows(app);
+    app.querySelectorAll('[data-fav-rm-o]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        favRemove(b.dataset.favRmO, b.dataset.favRmR);
+        viewMe();
+      });
+    });
+  };
+
   if (!TOKEN) {
-    app.innerHTML = errorBox('未设置访问令牌', '要查看自己的仓库与收藏，需要先填入 GitHub Token。', '')
+    app.innerHTML = favPanel + errorBox('未设置访问令牌', '要查看自己的仓库与已 Star，需要先填入 GitHub Token；本地收藏不受影响。', '')
       .replace(/<button class="btn" onclick="location.reload\(\)">重试<\/button>/,
         '<button class="btn primary" onclick="openSettings()">立即设置</button>');
+    bindFav();
     return;
   }
   try {
@@ -6217,19 +6301,24 @@ async function viewMe() {
           ${canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">新建仓库</button></div>' : ''}
         </div>
       </div>
+      ${favPanel}
       <div class="panel">
         <div class="panel-head">我的仓库 · ${repos.length}</div>
         ${repos.length ? repos.map(repoCard).join('') : '<div class="empty">没有仓库</div>'}
       </div>
       <div class="panel">
-        <div class="panel-head">已 Star · ${starred.length}</div>
-        ${starred.length ? starred.map(repoCard).join('') : '<div class="empty">还没有收藏</div>'}
+        <div class="panel-head">已 Star · ${starred.length}
+          <span class="spacer"></span>
+          <span class="dim" style="font-size:11.5px">公开可见</span>
+        </div>
+        ${starred.length ? starred.map(repoCard).join('') : '<div class="empty">还没有 Star</div>'}
       </div>`;
-
+    bindFav();
     const nr = $('#newRepo');
     if (nr) nr.addEventListener('click', openNewRepoDialog);
   } catch (e) {
-    app.innerHTML = errorBox('无法读取账户', e.message);
+    app.innerHTML = favPanel + errorBox('无法读取账户', e.message);
+    bindFav();
   }
 }
 
@@ -8046,6 +8135,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#auth').addEventListener('click', openSettings);
   $('#ch').addEventListener('click', openSettings);
   $('#upd').addEventListener('click', applyUpdate);
+  // 本地收藏按钮在多个页面复用，统一委托一次
+  document.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('[data-fav]') : null;
+    if (!b) return;
+    toggleLocalFav(b.dataset.favO, b.dataset.favR, {
+      desc: b.dataset.favDesc || '',
+      lang: b.dataset.favLang || '',
+      stars: Number(b.dataset.favStars) || 0,
+      avatar: b.dataset.favAvatar || ''
+    }, b);
+  });
+
   if (!location.hash) location.hash = '#/';
   route();
   maybeOnboard();
