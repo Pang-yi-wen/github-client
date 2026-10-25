@@ -79,6 +79,9 @@ public class MainActivity extends Activity {
     private long pendingDownloadId = -1;
     /** 通用文件下载：记录下载 id 与显示名，完成后提示已保存 */
     private final HashMap<Long, String> fileNames = new HashMap<>();
+    /** 本次启动是否已弹出页面更新提示，避免同一次加载里再弹安装包提示 */
+    private boolean pageUpdatePrompted = false;
+    private static final String PREF = "ghclient";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -160,7 +163,7 @@ public class MainActivity extends Activity {
                         localVersion = v == null ? "" : v.replaceAll("^\"|\"$", "");
                         if (!localVersion.isEmpty()) checkUpdate();
                     });
-                checkApkUpdate();
+                checkApkUpdate(false);
             }
         });
         wv.loadUrl(boot != null ? "file://" + boot.getAbsolutePath() : "file:///android_asset/boot.html");
@@ -310,9 +313,15 @@ public class MainActivity extends Activity {
         }
     };
 
-    private void checkApkUpdate() {
+    /** 供页面「检查更新」调用：手动触发安装包检查，忽略“已提示过”的限制 */
+    @JavascriptInterface
+    public void checkApkUpdate() {
+        checkApkUpdate(true);
+    }
+
+    private void checkApkUpdate(boolean manual) {
         new Thread(() -> {
-            String t = fetchTextRace(candidateUrls(APK_META_PATH.substring(SELF.length())), 12000);
+            String t = fetchTextRace(candidateUrls(APK_META_PATH.substring(SELF.length()), false), 12000);
             if (t == null) return;
             final long remoteCode;
             final String remoteName, apkName;
@@ -325,13 +334,24 @@ public class MainActivity extends Activity {
                 return;
             }
             if (remoteCode <= installedVersionCode()) return;
+            if (!manual) {
+                // 同一次加载里刚提示过页面更新，不再连着弹安装包；同一版本只自动提示一次
+                if (pageUpdatePrompted) return;
+                if (getSharedPreferences(PREF, MODE_PRIVATE).getLong("apk_seen_code", 0) >= remoteCode) return;
+            }
+            final String cur = installedVersionName();
             runOnUiThread(() -> new AlertDialog.Builder(this)
-                .setTitle("发现新版本 " + remoteName)
-                .setMessage("是否下载并安装新版本？")
+                .setTitle("安装包有新版本 " + remoteName)
+                .setMessage("当前安装包 " + (cur.isEmpty() ? "未知" : cur) + "，是否下载并安装？")
                 .setPositiveButton("下载", (d, w) -> downloadApk(remoteName, apkName))
-                .setNegativeButton("稍后", null)
+                .setNegativeButton("稍后", (d, w) -> markApkSeen(remoteCode))
+                .setOnCancelListener(d -> markApkSeen(remoteCode))
                 .show());
         }).start();
+    }
+
+    private void markApkSeen(long code) {
+        getSharedPreferences(PREF, MODE_PRIVATE).edit().putLong("apk_seen_code", code).apply();
     }
 
     private long installedVersionCode() {
@@ -340,6 +360,14 @@ public class MainActivity extends Activity {
             return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? pi.getLongVersionCode() : pi.versionCode;
         } catch (Exception e) {
             return 0;
+        }
+    }
+
+    private String installedVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "";
         }
     }
 
@@ -401,7 +429,8 @@ public class MainActivity extends Activity {
     /** DownloadManager 只接受单个地址，并行 HEAD 探明第一个可用的 */
     private String pickApkUrl(String apkName) {
         if (apkName == null || apkName.isEmpty()) return null;
-        return firstReachable(candidateUrls("/main/android/apk/" + apkName), 8000);
+        // 安装包文件名带版本号，内容不会变，可以放心走 CDN
+        return firstReachable(candidateUrls("/main/android/apk/" + apkName, true), 8000);
     }
 
     /* ------------------------- 页面落地与更新 ------------------------- */
@@ -446,7 +475,11 @@ public class MainActivity extends Activity {
 
     /** 读取构建时注入的 APP_VERSION，读不到返回空串（视为最旧） */
     private static String pageVersion(byte[] html) {
-        Matcher m = Pattern.compile("APP_VERSION\\s*=\\s*'([^']+)'").matcher(new String(html, StandardCharsets.UTF_8));
+        return pageVersionText(new String(html, StandardCharsets.UTF_8));
+    }
+
+    private static String pageVersionText(String html) {
+        Matcher m = Pattern.compile("APP_VERSION\\s*=\\s*'([^']+)'").matcher(html);
         return m.find() ? m.group(1) : "";
     }
 
@@ -462,21 +495,24 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             String remote = fetchRemoteVersion();
             if (remote == null || compareVer(remote, localVersion) <= 0) return;
-            runOnUiThread(() -> new AlertDialog.Builder(this)
-                .setTitle("发现新版本 " + remote)
-                .setMessage("当前版本 " + localVersion + "，是否现在更新？")
-                .setPositiveButton("更新", (d, w) -> doUpdate(remote))
-                .setNegativeButton("稍后", null)
-                .show());
+            runOnUiThread(() -> {
+                pageUpdatePrompted = true;
+                new AlertDialog.Builder(this)
+                    .setTitle("页面有新版本 " + remote)
+                    .setMessage("当前页面 " + localVersion + "，是否更新页面内容？")
+                    .setPositiveButton("更新", (d, w) -> doUpdate(remote))
+                    .setNegativeButton("稍后", null)
+                    .show();
+            });
         }).start();
     }
 
     private void doUpdate(String remote) {
         Toast.makeText(this, "正在下载 " + remote, Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            // 并行竞速取最快通道的页面，校验完整后再落盘，避免把错误页写进去
-            String html = fetchTextRace(candidateUrls("/main/GitHub.html"), 20000);
-            if (html == null || html.length() <= 50000 || !html.contains("GitHub")) {
+            // 并行竞速取最快通道；校验内容完整且页面版本不低于目标版本，避免镜像/缓存给旧页
+            String html = fetchTextRace(candidateUrls("/main/GitHub.html", false), 20000, remote);
+            if (html == null) {
                 runOnUiThread(() -> Toast.makeText(this, "更新失败：无法获取新版本文件", Toast.LENGTH_LONG).show());
                 return;
             }
@@ -492,6 +528,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 tmp.delete();
+                localVersion = remote;   // 内存里的版本同步，避免同一轮里再次判定为新版本
                 runOnUiThread(() -> {
                     webView.reload();
                     Toast.makeText(this, "已更新到 " + remote, Toast.LENGTH_LONG).show();
@@ -503,7 +540,7 @@ public class MainActivity extends Activity {
     }
 
     private String fetchRemoteVersion() {
-        String t = fetchTextRace(candidateUrls("/main/VERSION"), 12000);
+        String t = fetchTextRace(candidateUrls("/main/VERSION", false), 12000);
         if (t == null) return null;
         String v = t.trim().split("\n")[0].trim();
         return v.isEmpty() ? null : v;
@@ -549,19 +586,25 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 构造仓库内某文件的全部候选 URL（含 jsDelivr CDN），与网页版镜像池一致 */
-    private String[] candidateUrls(String pathAfterRepo) {
+    /** 构造仓库内某文件的候选 URL。allowCdn=false 用于自更新路径（VERSION/version.json/GitHub.html）：
+     *  jsDelivr 对 @main 有小时级强缓存，可能给出旧内容，造成“更新成功却仍提示新版本”。 */
+    private String[] candidateUrls(String pathAfterRepo, boolean allowCdn) {
         ArrayList<String> out = new ArrayList<>();
         String branch = "main";
         String rest = pathAfterRepo;
         if (rest.startsWith("/" + branch + "/")) rest = rest.substring(branch.length() + 2);
-        out.add("https://cdn.jsdelivr.net/gh/" + SELF + "@" + branch + "/" + rest);
+        if (allowCdn) out.add("https://cdn.jsdelivr.net/gh/" + SELF + "@" + branch + "/" + rest);
         for (String host : RAW) out.add(host + SELF + pathAfterRepo);
         return out.toArray(new String[0]);
     }
 
     /** 并行 GET 所有候选，返回第一个成功响应的文本；全部失败返回 null（首响即胜，其余取消） */
     private String fetchTextRace(String[] urls, int timeoutMs) {
+        return fetchTextRace(urls, timeoutMs, null);
+    }
+
+    /** 同上，并要求取到的页面版本不低于 minPageVer；镜像给出旧页时继续等其它通道 */
+    private String fetchTextRace(String[] urls, int timeoutMs, String minPageVer) {
         if (urls == null || urls.length == 0) return null;
         ExecutorService ex = Executors.newCachedThreadPool();
         AtomicReference<String> out = new AtomicReference<>(null);
@@ -572,7 +615,8 @@ public class MainActivity extends Activity {
             ex.submit(() -> {
                 if (won.get()) return;
                 String t = fetchText(u, timeoutMs, timeoutMs);
-                if (t != null && won.compareAndSet(false, true)) {
+                boolean ok = t != null && (minPageVer == null || compareVer(pageVersionText(t), minPageVer) >= 0);
+                if (ok && won.compareAndSet(false, true)) {
                     out.set(t);
                     latch.countDown();
                     return;

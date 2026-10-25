@@ -720,12 +720,13 @@ function cmpVer(a, b) {
 
 /** raw 通道的全部候选地址，自建中转优先 */
 function rawBaseUrls(seg) {
-  // 与文件下载共用同一套镜像（含 jsDelivr CDN），避免更新通道只走少数几个源
+  // 更新路径（VERSION / GitHub.html）会被反复覆盖，排除 jsDelivr 这类强缓存 CDN：
+  // 缓存未刷新时会拿到旧版本，表现为“更新成功却仍提示新版本”
   const parts = seg.split('/');
   if (parts.length < 4) return [RAW_HOST + '/' + seg];
   const [owner, repo, ref] = parts;
   const path = parts.slice(3).join('/');
-  return rawMirrorList(owner, repo, ref, path);
+  return rawMirrorList(owner, repo, ref, path).filter(u => !u.includes('jsdelivr.net'));
 }
 
 /** 读取来源仓库的 VERSION：先走 raw 并行竞速（不耗额度），全部失败再走 API */
@@ -795,7 +796,11 @@ async function applyUpdate() {
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '获取中…'; }
   try {
-    const html = await fetchFirst(seg, t => t.length > 50000 && t.indexOf('GitHub') >= 0, 30000);
+    const html = await fetchFirst(seg, t => {
+      if (!(t.length > 50000 && t.indexOf('GitHub') >= 0)) return false;
+      const m = t.match(/APP_VERSION\s*=\s*'([^']+)'/);
+      return !!m && cmpVer(m[1], updAvailable.version) >= 0;
+    }, 30000);
     if (!html) throw new Error('无法获取新版本文件');
 
     if (location.protocol === 'file:') {
@@ -3353,11 +3358,15 @@ async function openSettings() {
     if (st) st.textContent = '检查中…';
     const r = await checkUpdate(true);
     if (r) {
-      if (st) st.textContent = '发现新版本 ' + r.version + '，点击顶栏箭头更新';
-      toast('发现新版本 ' + r.version);
+      if (st) st.textContent = '发现页面新版本 ' + r.version + '，点击顶栏箭头更新';
+      toast('发现页面新版本 ' + r.version);
     } else {
-      if (st) st.textContent = '已是最新版本 ' + APP_VERSION;
+      if (st) st.textContent = '页面已是最新版本 ' + APP_VERSION;
     }
+    // 安卓壳：同时检查安装包（手动触发，忽略“已提示过”）
+    try {
+      if (window.Android && typeof window.Android.checkApkUpdate === 'function') window.Android.checkApkUpdate();
+    } catch (_) {}
   });
 
   $('#tkClear').addEventListener('click', () => {
