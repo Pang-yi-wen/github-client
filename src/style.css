@@ -1339,3 +1339,32 @@ mark {
   .profile { flex-direction: column; gap: 12px; }
   .file-row .fmsg { display: none; }
 }
+
+/* ---------- 下载进度面板 ---------- */
+.dl-panel {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .45); z-index: 60; padding: 20px;
+}
+.dl-panel[hidden] { display: none; }
+.dl-card {
+  width: 100%; max-width: 380px;
+  background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px 18px 16px; box-shadow: var(--shadow);
+}
+.dl-title { font-size: 13.5px; margin-bottom: 12px; color: var(--fg); line-height: 1.5; word-break: break-word; }
+.dl-bar { height: 8px; background: var(--bg-inset); border-radius: 999px; overflow: hidden; }
+.dl-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s; }
+.dl-meta { margin-top: 8px; font-size: 11.5px; color: var(--fg-muted); font-family: ui-monospace, monospace; }
+
+/* ---------- 下载指定文件表单 ---------- */
+.dl-form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.dl-form input {
+  flex: 1; min-width: 120px; height: 32px; padding: 0 10px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 12.5px; font-family: inherit; outline: none;
+}
+.dl-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}

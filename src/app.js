@@ -96,17 +96,7 @@ function joinRaw(ch, o, r, ref, p) {
 
 /** 所有能取到同一个 raw 的地址，按实测速度排序，供图片逐级降级 */
 function rawSources(o, r, ref, p) {
-  const seg = encodeURIComponent(o) + '/' + encodeURIComponent(r) + '/' +
-              encodeURIComponent(ref) + '/' + encPath(p);
-  const list = [
-    RAW_HOST + '/' + seg,
-    'https://gh-proxy.org/' + RAW_HOST + '/' + seg,
-    'https://gh-proxy.com/' + RAW_HOST + '/' + seg,
-    'https://ghfast.top/' + RAW_HOST + '/' + seg
-  ];
-  const c = chCustom();
-  if (c) list.unshift(joinRaw(c, o, r, ref, p));
-  return list;
+  return rawMirrorList(o, r, ref, p);
 }
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -551,22 +541,121 @@ function getRepo(o, r) {
 /* ---------- 直接读 raw：不消耗 API 额度 ---------- */
 
 async function fetchRawBytes(o, r, ref, path) {
-  const sources = rawSources(o, r, ref, path);
-  let lastErr = null;
-  for (const url of sources) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 20000);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return new Uint8Array(await res.arrayBuffer());
-    } catch (e) {
-      lastErr = e;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  throw lastErr || new Error('raw 不可用');
+  const urls = rawMirrorList(o, r, ref, path);
+  const ctrls = urls.map(() => new AbortController());
+  // 并行竞速：第一个成功返回的通道胜出，其余立即取消，避免顺序等待死代理
+  return await new Promise((resolve, reject) => {
+    let done = false, pending = urls.length, lastErr = null;
+    urls.forEach((url, i) => {
+      const t = setTimeout(() => ctrls[i].abort(), 15000);
+      fetch(url, { signal: ctrls[i].signal })
+        .then(async res => {
+          clearTimeout(t);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const buf = new Uint8Array(await res.arrayBuffer());
+          if (done) return;
+          done = true;
+          ctrls.forEach((c, j) => { if (j !== i) c.abort(); });
+          resolve(buf);
+        })
+        .catch(e => {
+          clearTimeout(t);
+          lastErr = e;
+          if (--pending === 0 && !done) reject(lastErr || new Error('raw 不可用'));
+        });
+    });
+    setTimeout(() => {
+      if (!done) { done = true; ctrls.forEach(c => c.abort()); reject(lastErr || new Error('raw 不可用')); }
+    }, 16000);
+  });
+}
+
+/** 同一 raw 的全部镜像地址，按「自建 → 直连 → jsDelivr CDN → 公共中转」排序。
+ *  jsDelivr 是面向国内的快速 CDN；其余公共中转作为兜底。 */
+function rawMirrorList(o, r, ref, p) {
+  const seg = encodeURIComponent(o) + '/' + encodeURIComponent(r) + '/' +
+              encodeURIComponent(ref) + '/' + encPath(p);
+  const raw = RAW_HOST + '/' + seg;
+  const list = [];
+  const c = chCustom();
+  if (c) list.push(joinRaw(c, o, r, ref, p));
+  list.push(raw);
+  list.push('https://cdn.jsdelivr.net/gh/' + encodeURIComponent(o) + '/' +
+            encodeURIComponent(r) + '@' + encodeURIComponent(ref) + '/' + encPath(p).replace(/^\/+/, ''));
+  list.push('https://ghproxy.net/' + raw);
+  list.push('https://mirror.ghproxy.com/' + raw);
+  list.push('https://github.moeyy.xyz/' + raw);
+  list.push('https://raw.gitmirror.com/' + seg);
+  list.push('https://gh-proxy.org/' + raw);
+  list.push('https://gh-proxy.com/' + raw);
+  list.push('https://ghfast.top/' + raw);
+  return list;
+}
+
+function mirrorLabel(url) {
+  if (url.includes('jsdelivr.net')) return 'jsDelivr CDN';
+  if (url.includes('ghproxy.net')) return 'ghproxy.net';
+  if (url.includes('mirror.ghproxy.com')) return 'mirror.ghproxy';
+  if (url.includes('moeyy.xyz')) return 'moeyy.xyz';
+  if (url.includes('gitmirror.com')) return 'gitmirror';
+  if (url.includes('gh-proxy.org')) return 'gh-proxy.org';
+  if (url.includes('gh-proxy.com')) return 'gh-proxy.com';
+  if (url.includes('ghfast.top')) return 'ghfast.top';
+  if (url.includes('raw.githubusercontent.com')) return '直连 raw';
+  if (url.includes('workers.dev') || url.includes('{url}')) return '自建中转';
+  return '中转';
+}
+
+/** 用极小的 Range 请求并行探速，挑第一个响应的可用通道，供下载时交给原生下载器 */
+async function pickBestRawUrl(o, r, ref, path) {
+  const urls = rawMirrorList(o, r, ref, path);
+  const labels = urls.map(mirrorLabel);
+  const ctrls = urls.map(() => new AbortController());
+  return await new Promise(resolve => {
+    let done = false, pending = urls.length;
+    urls.forEach((url, i) => {
+      const t0 = performance.now();
+      const t = setTimeout(() => ctrls[i].abort(), 12000);
+      fetch(url, { method: 'GET', headers: { Range: 'bytes=0-0' }, signal: ctrls[i].signal })
+        .then(res => {
+          clearTimeout(t);
+          if (!res.ok && res.status !== 206) throw new Error('HTTP ' + res.status);
+          const ms = Math.round(performance.now() - t0);
+          if (done) return;
+          done = true;
+          ctrls.forEach((c, j) => { if (j !== i) c.abort(); });
+          resolve({ url, label: labels[i], ms });
+        })
+        .catch(() => {
+          clearTimeout(t);
+          if (--pending === 0 && !done) resolve(null);
+        });
+    });
+    setTimeout(() => { if (!done) { done = true; resolve(null); } }, 13000);
+  });
+}
+
+/** 带进度回调的字节下载，用于桌面端在页面内显示速度/百分比 */
+function xhrBytes(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url);
+    xhr.responseType = 'arraybuffer';
+    let lastT = performance.now(), lastL = 0;
+    xhr.onprogress = e => {
+      const now = performance.now();
+      const dt = (now - lastT) / 1000;
+      const speed = dt > 0 ? (e.loaded - lastL) / dt : 0;
+      lastT = now; lastL = e.loaded;
+      onProgress && onProgress(e.loaded, e.lengthComputable ? e.total : 0, speed);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(new Uint8Array(xhr.response));
+      else reject(new Error('HTTP ' + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.send();
+  });
 }
 
 function bytesToText(buf) {
@@ -2029,21 +2118,91 @@ async function viewBlob(o, r, ref, path) {
   }
 }
 
+/* ------------------------- 下载进度面板 ------------------------- */
+
+function showDlPanel(msg) {
+  let p = document.getElementById('dlPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = 'dlPanel';
+    p.className = 'dl-panel';
+    p.innerHTML = '<div class="dl-card">' +
+      '<div class="dl-title" id="dlMsg"></div>' +
+      '<div class="dl-bar"><div class="dl-fill" id="dlFill"></div></div>' +
+      '<div class="dl-meta" id="dlMeta"></div></div>';
+    document.body.appendChild(p);
+  }
+  p.hidden = false;
+  updateDlPanel(msg, 0, null, null);
+}
+function updateDlPanel(msg, pct, loaded, speed) {
+  const p = document.getElementById('dlPanel');
+  if (!p) return;
+  document.getElementById('dlMsg').textContent = msg;
+  document.getElementById('dlFill').style.width = (pct || 0) + '%';
+  let m = '';
+  if (loaded != null) m += fmtSize(loaded);
+  if (speed != null) m += (m ? ' · ' : '') + fmtSize(speed) + '/s';
+  document.getElementById('dlMeta').textContent = m;
+}
+function hideDlPanel() {
+  const p = document.getElementById('dlPanel');
+  if (p) p.hidden = true;
+}
+
+/** 从粘贴的链接或简写解析出 owner/repo/ref/path */
+function parseGithubFileUrl(str) {
+  if (!str) return null;
+  str = str.trim();
+  let m = str.match(/raw\.githubusercontent\.com\/([^\/]+)\/([^\/]+)\/([^\/]+)\/(.+)$/);
+  if (m) return { o: m[1], r: m[2], ref: decodeURIComponent(m[3]), path: m[4] };
+  m = str.match(/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)$/);
+  if (m) return { o: m[1], r: m[2], ref: decodeURIComponent(m[3]), path: m[4] };
+  m = str.match(/^([\w.-]+)\/([\w.-]+)\/([\w.-]+)\/(.+)$/);
+  if (m) return { o: m[1], r: m[2], ref: m[3], path: m[4] };
+  return null;
+}
+
 async function downloadOne(o, r, ref, path, name) {
-  toast('准备下载…', 8000);
+  name = name || path.split('/').pop() || 'file';
+  if (!ref || ref === 'HEAD') ref = 'main';
+  showDlPanel('正在选择最快通道…');
+  let pick = null;
+  try { pick = await pickBestRawUrl(o, r, ref, path); } catch (_) {}
+  if (!pick) {
+    const list = rawMirrorList(o, r, ref, path);
+    hideDlPanel();
+    window.open(list[list.length - 1], '_blank');
+    toast('未能自动选通，已在浏览器打开');
+    return;
+  }
+  updateDlPanel('已选定通道：' + pick.label + '（' + pick.ms + ' ms）', 0, null, null);
+
+  // 移动端：交给系统下载管理器，原生带通知栏进度并可靠落盘
+  if (window.Android && typeof window.Android.downloadFile === 'function') {
+    window.Android.downloadFile(pick.url, name);
+    updateDlPanel('已交给系统下载管理器，进度见通知栏：' + name, 100, null, null);
+    setTimeout(hideDlPanel, 1800);
+    return;
+  }
+
+  // 桌面端：XHR 带进度，下载完用 blob 落地
   try {
-    const buf = await fetchRawBytes(o, r, ref, path);
+    const buf = await xhrBytes(pick.url, (loaded, total, speed) => {
+      const pct = total ? Math.round(loaded / total * 100) : Math.min(95, Math.round(loaded / 1048576 * 2));
+      updateDlPanel('下载中（' + pick.label + '）', pct, loaded, speed);
+    });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' }));
     a.download = name;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-    toast('已开始下载');
-  } catch (_) {
-    const list = rawSources(o, r, ref, path);
-    window.open(list[list.length - 1], '_blank');
-    toast('已在新标签页打开');
+    updateDlPanel('已开始下载：' + name, 100, null, null);
+    setTimeout(hideDlPanel, 1500);
+  } catch (e) {
+    hideDlPanel();
+    toast('下载失败：' + (e.message || e));
   }
 }
 
@@ -2861,11 +3020,23 @@ async function viewTools(o, r, ref) {
   </div>
 
   <div class="tool-card">
-    <h3>单个文件</h3>
-    <p class="hint">在本客户端里浏览文件、看 README 图片时无需关心这些地址，程序会自动挑可用的。</p>
+    <h3>下载指定文件</h3>
+    <p class="hint">粘贴文件链接（github.com 的 blob 页或 raw 链接），或手动填下方字段，客户端会并行探测并挑最快通道下载到本机。</p>
+    <div class="dl-form">
+      <input id="dlUrl" type="text" placeholder="粘贴文件链接，或 owner/repo@ref/path" spellcheck="false">
+      <button class="btn" id="dlParse">解析</button>
+    </div>
+    <div class="dl-form">
+      <input id="dlOwn" type="text" placeholder="owner/repo" spellcheck="false" value="${has ? esc(o + '/' + r) : ''}">
+      <input id="dlRef" type="text" placeholder="分支/标签（默认 main）" spellcheck="false" value="${has ? esc(f) : ''}">
+      <input id="dlPath" type="text" placeholder="文件路径，如 src/app.js" spellcheck="false">
+    </div>
+    <div class="dl-form">
+      <input id="dlName" type="text" placeholder="保存文件名（留空取路径末段）" spellcheck="false">
+      <button class="btn primary" id="dlGo">下载文件</button>
+    </div>
+    <div id="dlTip" class="dim" style="font-size:12px;margin-top:6px"></div>
     ${row('直连', rawBase)}
-    ${row('中转', `https://gh-proxy.org/${rawBase}`)}
-    ${row('备选', `https://ghfast.top/${rawBase}`)}
   </div>
 
   <div class="tool-card">
@@ -2895,6 +3066,28 @@ async function viewTools(o, r, ref) {
     toast('探测完成');
   });
   $('#gotoSettings').addEventListener('click', openSettings);
+
+  const dlParse = $('#dlParse');
+  if (dlParse) dlParse.addEventListener('click', () => {
+    const v = $('#dlUrl').value.trim();
+    const p = parseGithubFileUrl(v);
+    if (!p) { $('#dlTip').textContent = '无法识别该链接'; return; }
+    $('#dlOwn').value = p.o + '/' + p.r;
+    $('#dlRef').value = p.ref;
+    $('#dlPath').value = p.path;
+    $('#dlTip').textContent = '已解析：' + p.o + '/' + p.r + ' @ ' + p.ref + ' / ' + p.path;
+  });
+  const dlGo = $('#dlGo');
+  if (dlGo) dlGo.addEventListener('click', () => {
+    const own = $('#dlOwn').value.trim();
+    const mm = own.match(/^([\w.-]+)\/([\w.-]+)$/);
+    if (!mm) { $('#dlTip').textContent = 'owner/repo 格式不正确'; return; }
+    const ref = $('#dlRef').value.trim() || 'main';
+    const path = $('#dlPath').value.trim();
+    if (!path) { $('#dlTip').textContent = '请填写文件路径'; return; }
+    const name = $('#dlName').value.trim() || path.split('/').pop();
+    downloadOne(mm[1], mm[2], ref, path, name);
+  });
 }
 
 /* ---------------------------- 设置面板 ---------------------------- */

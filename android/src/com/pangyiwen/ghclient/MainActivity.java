@@ -33,11 +33,16 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.HashMap;
+import java.util.regex.Pattern;
 
 /**
  * 单文件客户端外壳。内置页面首次运行时复制到可写目录后加载，
@@ -59,6 +64,8 @@ public class MainActivity extends Activity {
     private View zoomBar;
     private String localVersion = "";
     private long pendingDownloadId = -1;
+    /** 通用文件下载：记录下载 id 与显示名，完成后提示已保存 */
+    private final HashMap<Long, String> fileNames = new HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -151,8 +158,10 @@ public class MainActivity extends Activity {
         IntentFilter f = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(apkReady, f, Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(fileReady, f, Context.RECEIVER_NOT_EXPORTED);
         } else {
             registerReceiver(apkReady, f);
+            registerReceiver(fileReady, f);
         }
     }
 
@@ -191,6 +200,16 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> {
             if (zoomBar != null) zoomBar.setVisibility(visible ? View.VISIBLE : View.GONE);
         });
+    }
+
+    /** 供页面显示壳版本，与页面版本（VERSION 文件）区分 */
+    @JavascriptInterface
+    public String shellVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** 右下角悬浮缩放条：与双指捏合共用 WebView 的缩放引擎，只缩放显示，不改排版 */
@@ -267,6 +286,17 @@ public class MainActivity extends Activity {
         }
     };
 
+    /** 通用文件下载完成 → 提示已保存到下载目录 */
+    private final BroadcastReceiver fileReady = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context ctx, Intent intent) {
+            long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+            String name = fileNames.remove(id);
+            if (name == null) return;
+            Toast.makeText(MainActivity.this, "已保存到下载目录：" + name, Toast.LENGTH_LONG).show();
+        }
+    };
+
     private void checkApkUpdate() {
         new Thread(() -> {
             String t = null;
@@ -330,6 +360,35 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "已开始下载，完成后自动调起安装", Toast.LENGTH_LONG).show();
     }
 
+    /** 供页面调用：用系统下载管理器抓取任意 URL，带通知栏进度，落盘到下载目录 */
+    @JavascriptInterface
+    public void downloadFile(String url, String name) {
+        if (url == null || url.isEmpty()) {
+            runOnUiThread(() -> Toast.makeText(this, "下载地址为空", Toast.LENGTH_SHORT).show());
+            return;
+        }
+        if (name == null || name.isEmpty()) {
+            name = url.substring(url.lastIndexOf('/') + 1);
+        }
+        if (name.isEmpty()) name = "github-file";
+        DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+        DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+        r.setTitle(name);
+        r.setDescription("正在下载文件");
+        r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+        r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+        r.allowScanningByMediaScanner();
+        try {
+            long id = dm.enqueue(r);
+            final String shown = name;
+            fileNames.put(id, shown);
+            runOnUiThread(() -> Toast.makeText(this,
+                "已开始下载：" + shown + "（进度见通知栏）", Toast.LENGTH_LONG).show());
+        } catch (Exception e) {
+            runOnUiThread(() -> Toast.makeText(this, "下载失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+        }
+    }
+
     /** DownloadManager 只接受单个地址，先跨源探明第一个可用的 */
     private String pickApkUrl(String apkName) {
         if (apkName == null || apkName.isEmpty()) return null;
@@ -356,16 +415,43 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 首次运行把内置页面复制到可写目录；安装包自带的页面变化时以安装包为准。
-     * shortcut: 用文件长度判断内置页面是否更新，同长度不同内容时不刷新，重新安装可强制刷新
+     * 首次运行把内置页面复制到可写目录；安装包里的页面比本地新才覆盖。
+     * 本地页面可能经更新通道下载了比安装包更新的版本，那种情况必须保留——
+     * 早先按文件长度判断，会把更新下载的页面在每次重启时降级回安装包版本，
+     * 导致更新提示反复出现。
      */
     private void ensurePage() throws Exception {
+        byte[] asset = readAll(getAssets().open("index.html"));
         File page = pageFile();
-        InputStream probe = getAssets().open("index.html");
-        long assetLen = probe.available();
-        probe.close();
-        if (!page.exists() || page.length() != assetLen) copyAsset("index.html", page);
+        if (!page.exists()) {
+            writeFile(page, asset);
+        } else {
+            byte[] local = readAll(new FileInputStream(page));
+            if (compareVer(pageVersion(asset), pageVersion(local)) > 0) writeFile(page, asset);
+        }
         copyAsset("boot.html", new File(getFilesDir(), "boot.html"));
+    }
+
+    private static byte[] readAll(InputStream in) throws Exception {
+        try (InputStream s = in) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = s.read(buf)) > 0) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        }
+    }
+
+    private static void writeFile(File f, byte[] data) throws Exception {
+        try (OutputStream out = new FileOutputStream(f)) {
+            out.write(data);
+        }
+    }
+
+    /** 读取构建时注入的 APP_VERSION，读不到返回空串（视为最旧） */
+    private static String pageVersion(byte[] html) {
+        Matcher m = Pattern.compile("APP_VERSION\\s*=\\s*'([^']+)'").matcher(new String(html, StandardCharsets.UTF_8));
+        return m.find() ? m.group(1) : "";
     }
 
     private void copyAsset(String name, File dst) throws Exception {
