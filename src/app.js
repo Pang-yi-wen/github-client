@@ -795,6 +795,17 @@ async function applyUpdate() {
   const btn = $('#upd');
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '获取中…'; }
+
+  // 客户端内由原生下载、写入页面并重载，不需要用户手动替换文件
+  if (window.Android && typeof window.Android.updatePage === 'function') {
+    try {
+      window.Android.updatePage(updAvailable.version);
+      toast('正在更新页面到 ' + updAvailable.version + '，完成后自动重载', 5000);
+      setTimeout(() => { if (btn) { btn.disabled = false; btn.textContent = label; } }, 12000);
+      return;
+    } catch (_) {}
+  }
+
   try {
     const html = await fetchFirst(seg, t => {
       if (!(t.length > 50000 && t.indexOf('GitHub') >= 0)) return false;
@@ -811,7 +822,7 @@ async function applyUpdate() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast('新版本 ' + updAvailable.version + ' 已下载，替换原文件后重新打开');
+      toast('新版本 ' + updAvailable.version + ' 已下载为 GitHub.html，在浏览器下载目录；用它替换原文件后重新打开', 7000);
     } else {
       toast('正在切换到 ' + updAvailable.version);
       document.open();

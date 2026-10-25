@@ -721,6 +721,13 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** 供页面顶栏“↑ 新版本”调用：由客户端下载、写盘并重载，不需要用户手动替换文件 */
+    @JavascriptInterface
+    public void updatePage(String version) {
+        if (version == null || version.isEmpty()) return;
+        runOnUiThread(() -> doUpdate(version));
+    }
+
     private void doUpdate(String remote) {
         Toast.makeText(this, "正在下载 " + remote, Toast.LENGTH_SHORT).show();
         new Thread(() -> {
