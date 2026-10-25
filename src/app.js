@@ -2539,7 +2539,7 @@ function renderDlList() {
   }
   list.innerHTML = arr.map(it => {
     const t = Number(it.time) ? new Date(Number(it.time)).toLocaleString('zh-CN') : '';
-    const st = it.done ? '已完成' : '下载中';
+    const st = it.failed ? '失败' : (it.done ? '已完成' : '下载中');
     return `<div class="dl-row">
       <div class="dl-row-main">
         <b>${esc(it.name || '')}</b>

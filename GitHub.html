@@ -2763,7 +2763,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.18';
+const APP_VERSION = '1.0.19';
 'use strict';
 
 /* ============================================================
@@ -5305,7 +5305,7 @@ function renderDlList() {
   }
   list.innerHTML = arr.map(it => {
     const t = Number(it.time) ? new Date(Number(it.time)).toLocaleString('zh-CN') : '';
-    const st = it.done ? '已完成' : '下载中';
+    const st = it.failed ? '失败' : (it.done ? '已完成' : '下载中');
     return `<div class="dl-row">
       <div class="dl-row-main">
         <b>${esc(it.name || '')}</b>

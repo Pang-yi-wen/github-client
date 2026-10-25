@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.content.pm.PackageInfo;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -324,17 +325,74 @@ public class MainActivity extends Activity {
         }
     };
 
-    /** 通用文件下载完成 → 提示已保存到下载目录 */
+    /** 通用文件下载完成 → 校验状态/大小/文件头后再给结论，避免把失败或半截文件当成成功 */
     private final BroadcastReceiver fileReady = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
             long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
             String name = fileNames.remove(id);
             if (name == null) return;
-            markDownloadDone(id);
-            Toast.makeText(MainActivity.this, "已保存到下载目录：" + name, Toast.LENGTH_LONG).show();
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            boolean ok = false;
+            String msg;
+            Cursor c = null;
+            try {
+                c = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (c != null && c.moveToFirst()) {
+                    int status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                    long got = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                    long total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                    String title = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE));
+                    if (title != null && !title.isEmpty()) name = title;
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        if (total > 0 && got != total) {
+                            msg = "下载不完整：" + name + "（" + fmtBytes(got) + "/" + fmtBytes(total) + "），请换通道重下";
+                        } else if (name.toLowerCase().endsWith(".apk") && !looksLikeZip(dm.getUriForDownloadedFile(id))) {
+                            msg = "文件不是有效 APK：" + name + "，该通道可能返回了错误页，请换通道重下";
+                        } else {
+                            ok = true;
+                            msg = "已保存到下载目录：" + name + (total > 0 ? "（" + fmtBytes(total) + "）" : "");
+                        }
+                    } else if (status == DownloadManager.STATUS_FAILED) {
+                        msg = "下载失败：" + name + "，请换一个通道重试";
+                    } else {
+                        msg = "下载未完成：" + name + "，请在通知栏继续";
+                    }
+                } else {
+                    msg = "下载结束，请到下载目录查看：" + name;
+                }
+            } catch (Exception e) {
+                msg = "下载结束，请到下载目录查看：" + name;
+            } finally {
+                if (c != null) c.close();
+            }
+            markDownloadDone(id, ok);
+            Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
         }
     };
+
+    /** APK/ZIP 头必须是 PK\\x03\\x04，用来识别被代理换成 HTML 错误页的情况 */
+    private boolean looksLikeZip(Uri uri) {
+        if (uri == null) return false;
+        InputStream in = null;
+        try {
+            in = getContentResolver().openInputStream(uri);
+            if (in == null) return false;
+            byte[] b = new byte[4];
+            int n = in.read(b);
+            return n == 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (in != null) try { in.close(); } catch (Exception ignore) {}
+        }
+    }
+
+    private static String fmtBytes(long b) {
+        if (b < 1024) return b + " B";
+        if (b < 1048576) return String.format(java.util.Locale.US, "%.1f KB", b / 1024.0);
+        return String.format(java.util.Locale.US, "%.1f MB", b / 1048576.0);
+    }
 
     /** 供页面「检查更新」调用：手动触发安装包检查，忽略“已提示过”的限制 */
     @JavascriptInterface
@@ -618,13 +676,16 @@ public class MainActivity extends Activity {
         } catch (Exception ignore) {}
     }
 
-    private void markDownloadDone(long id) {
+    private void markDownloadDone(long id, boolean ok) {
         try {
             SharedPreferences sp = getSharedPreferences(PREF, MODE_PRIVATE);
             JSONArray arr = new JSONArray(sp.getString("downloads", "[]"));
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
-                if (o.optLong("id") == id) o.put("done", true);
+                if (o.optLong("id") == id) {
+                    o.put("done", ok);
+                    o.put("failed", !ok);
+                }
             }
             sp.edit().putString("downloads", arr.toString()).apply();
         } catch (Exception ignore) {}
