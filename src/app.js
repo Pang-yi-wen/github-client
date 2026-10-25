@@ -1102,7 +1102,7 @@ function repoHeader(repo, tab, srcUrl) {
       ${repo.homepage ? `<span>${ICON.link}<a href="${esc(repo.homepage)}" target="_blank" rel="noopener">${esc(repo.homepage)}</a></span>` : ''}
     </div>
     ${srcLink(srcUrl)}
-    ${canWrite() ? repoActions(o, r, repo) : ''}
+    ${writeBlock(o, r, repo)}
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -3347,21 +3347,30 @@ async function ghWrite(method, path, body) {
   if (!TOKEN) throw new Error('需要访问令牌');
   await ensureChannels();
 
-  const trusted = channelOrder.filter((ch) => ch.trust);
-  if (!trusted.length) {
-    throw new Error('当前仅公共中转可用；写操作需要直连或自建通道');
-  }
+  let trusted = channelOrder.filter((ch) => ch.trust);
+  // 启动探测给直连的时限很短，移动网络下容易误判为不可用；
+  // 写操作再给直连一次机会（45 秒超时），成功则恢复到通道链首位
+  const retryDirect = trusted.length === 0;
+  if (retryDirect) trusted = [CH_DIRECT];
 
   let lastErr = null;
   for (const ch of trusted) {
     try {
       const out = await fetchVia(ch, path, { method: method, body: body, timeout: 45000 });
       clearCache();   // 内容已变，缓存不再可靠
+      if (retryDirect && ch === CH_DIRECT) {
+        channelOrder = [CH_DIRECT].concat(channelOrder);
+        activeChannel = CH_DIRECT;
+        updateChannelBadge();
+      }
       return out;
     } catch (e) {
       if (!e.channelFail) throw e;
       lastErr = e;
     }
+  }
+  if (retryDirect) {
+    throw new Error('直连不可用；写操作需要直连或自建通道，公共中转会暴露令牌');
   }
   throw (lastErr || new Error('写入失败'));
 }
@@ -3433,6 +3442,17 @@ async function doFork(o, r, btn) {
 }
 
 /* ---------- 界面：仓库操作条 ---------- */
+
+/**
+ * 仓库页写操作区。未启用写操作时给出可见原因与设置入口，
+ * 避免小屏上按钮缺失时无从判断（令牌缺失另在顶栏与首页提示）。
+ */
+function writeBlock(o, r, repo) {
+  if (canWrite()) return repoActions(o, r, repo);
+  if (!TOKEN || writeEnabled()) return '';
+  return '<div class="write-hint">写操作未启用，收藏 / Fork / 上传 / 删除不可用' +
+    '<button type="button" class="btn sm ghost" id="wrEnable">去设置开启</button></div>';
+}
 
 function repoActions(o, r, repo) {
   if (!canWrite()) return '';
@@ -3530,6 +3550,9 @@ function openDeleteRepoDialog(o, r) {
 }
 
 function bindRepoActions(o, r, forked) {
+  const wrEnable = $('#wrEnable');
+  if (wrEnable) wrEnable.addEventListener('click', openSettings);
+
   const star = $('#actStar');
   if (star) {
     refreshStarBtn(o, r, star);

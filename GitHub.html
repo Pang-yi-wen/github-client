@@ -1167,6 +1167,20 @@ mark {
 
 /* ---------- 仓库卡片 ---------- */
 
+/* 写操作未启用时的说明条：说明原因并给设置入口 */
+.write-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+
 .repo-card { padding: 13px 16px; border-bottom: 1px solid var(--border-muted); min-width: 0; }
 .repo-card:last-child { border-bottom: none; }
 .rc-name { font-size: 15px; font-weight: 500; margin-bottom: 3px; overflow-wrap: anywhere; }
@@ -2633,7 +2647,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 'use strict';
 
 /* ============================================================
@@ -3738,7 +3752,7 @@ function repoHeader(repo, tab, srcUrl) {
       ${repo.homepage ? `<span>${ICON.link}<a href="${esc(repo.homepage)}" target="_blank" rel="noopener">${esc(repo.homepage)}</a></span>` : ''}
     </div>
     ${srcLink(srcUrl)}
-    ${canWrite() ? repoActions(o, r, repo) : ''}
+    ${writeBlock(o, r, repo)}
   </div>
   <div class="repo-tabs">
     ${tabs.map(([k, label, href]) =>
@@ -5983,21 +5997,30 @@ async function ghWrite(method, path, body) {
   if (!TOKEN) throw new Error('需要访问令牌');
   await ensureChannels();
 
-  const trusted = channelOrder.filter((ch) => ch.trust);
-  if (!trusted.length) {
-    throw new Error('当前仅公共中转可用；写操作需要直连或自建通道');
-  }
+  let trusted = channelOrder.filter((ch) => ch.trust);
+  // 启动探测给直连的时限很短，移动网络下容易误判为不可用；
+  // 写操作再给直连一次机会（45 秒超时），成功则恢复到通道链首位
+  const retryDirect = trusted.length === 0;
+  if (retryDirect) trusted = [CH_DIRECT];
 
   let lastErr = null;
   for (const ch of trusted) {
     try {
       const out = await fetchVia(ch, path, { method: method, body: body, timeout: 45000 });
       clearCache();   // 内容已变，缓存不再可靠
+      if (retryDirect && ch === CH_DIRECT) {
+        channelOrder = [CH_DIRECT].concat(channelOrder);
+        activeChannel = CH_DIRECT;
+        updateChannelBadge();
+      }
       return out;
     } catch (e) {
       if (!e.channelFail) throw e;
       lastErr = e;
     }
+  }
+  if (retryDirect) {
+    throw new Error('直连不可用；写操作需要直连或自建通道，公共中转会暴露令牌');
   }
   throw (lastErr || new Error('写入失败'));
 }
@@ -6069,6 +6092,17 @@ async function doFork(o, r, btn) {
 }
 
 /* ---------- 界面：仓库操作条 ---------- */
+
+/**
+ * 仓库页写操作区。未启用写操作时给出可见原因与设置入口，
+ * 避免小屏上按钮缺失时无从判断（令牌缺失另在顶栏与首页提示）。
+ */
+function writeBlock(o, r, repo) {
+  if (canWrite()) return repoActions(o, r, repo);
+  if (!TOKEN || writeEnabled()) return '';
+  return '<div class="write-hint">写操作未启用，收藏 / Fork / 上传 / 删除不可用' +
+    '<button type="button" class="btn sm ghost" id="wrEnable">去设置开启</button></div>';
+}
 
 function repoActions(o, r, repo) {
   if (!canWrite()) return '';
@@ -6166,6 +6200,9 @@ function openDeleteRepoDialog(o, r) {
 }
 
 function bindRepoActions(o, r, forked) {
+  const wrEnable = $('#wrEnable');
+  if (wrEnable) wrEnable.addEventListener('click', openSettings);
+
   const star = $('#actStar');
   if (star) {
     refreshStarBtn(o, r, star);
