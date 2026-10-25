@@ -3198,7 +3198,7 @@ async function renderAccount() {
       + '<div class="modal-actions" style="margin-top:0">'
       + '<button class="btn sm" id="acSignup">注册 GitHub 账号</button>'
       + '<button class="btn sm ghost" id="acLogin">网页登录</button></div>'
-      + '<div class="hint" style="font-size:11.5px;margin-top:8px">注册与登录只在 GitHub 网页提供，点按钮在客户端内打开。</div>';
+      + '<div class="hint" style="font-size:11.5px;margin-top:8px">注册与登录只在 GitHub 网页提供，点按钮在客户端内打开；打不开时点弹窗右上角「浏览器」，或换到能访问 github.com 的网络。账号页不能走第三方代理。</div>';
     const s = $('#acSignup'); if (s) s.onclick = () => openWebPage('https://github.com/signup');
     const l = $('#acLogin'); if (l) l.onclick = () => openWebPage('https://github.com/login');
     return;
@@ -3232,7 +3232,7 @@ async function renderAccount() {
       </div>
       <div class="acct-web">${ACCT_WEB.map(b => `<button class="btn sm ghost" data-web="${b.u}">${b.t}</button>`).join('')}</div>
       <div class="hint" style="font-size:11.5px;margin-top:8px">
-        改密码、两步验证、改用户名、注销账号、管理令牌只在 GitHub 网页提供，上面的按钮在客户端内打开对应页面（需当前网络能访问 github.com）。
+        改密码、两步验证、改用户名、注销账号、管理令牌只在 GitHub 网页提供，上面的按钮在客户端内打开对应页面。账号页涉及密码与 Cookie，不能走第三方代理；打不开时点弹窗右上角「浏览器」或换网络。
       </div>`;
     $('#acEdit').onclick = () => acctEditForm(u);
     box.querySelectorAll('[data-web]').forEach(b => { b.onclick = () => openWebPage(b.dataset.web); });

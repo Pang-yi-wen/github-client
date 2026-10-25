@@ -22,6 +22,7 @@ import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -85,6 +86,10 @@ public class MainActivity extends Activity {
     private final HashMap<Long, String> fileNames = new HashMap<>();
     /** 本次启动是否已弹出页面更新提示，避免同一次加载里再弹安装包提示 */
     private boolean pageUpdatePrompted = false;
+    /** 本次启动是否已经开始检查更新，boot.html 与 index.html 会各触发一次 onPageFinished */
+    private volatile boolean updateChecksStarted = false;
+    /** 安装包更新弹窗是否正在显示，避免同一版本叠两个对话框 */
+    private volatile boolean apkDialogShowing = false;
     private static final String PREF = "ghclient";
 
     @Override
@@ -177,9 +182,10 @@ public class MainActivity extends Activity {
                     "(function(){try{return APP_VERSION||''}catch(e){return ''}})()",
                     v -> {
                         localVersion = v == null ? "" : v.replaceAll("^\"|\"$", "");
-                        if (!localVersion.isEmpty()) checkUpdate();
+                        // boot.html 没有 APP_VERSION，只有真正加载了页面才检查；
+                        // 否则 boot→index 两次 onPageFinished 会把同一版本弹两遍
+                        if (!localVersion.isEmpty()) runUpdateChecks();
                     });
-                checkApkUpdate(false);
             }
         });
         wv.loadUrl(boot != null ? "file://" + boot.getAbsolutePath() : "file:///android_asset/boot.html");
@@ -356,14 +362,20 @@ public class MainActivity extends Activity {
                 if (pageUpdatePrompted) return;
                 if (getSharedPreferences(PREF, MODE_PRIVATE).getLong("apk_seen_code", 0) >= remoteCode) return;
             }
+            if (apkDialogShowing) return;
             final String cur = installedVersionName();
-            runOnUiThread(() -> new AlertDialog.Builder(this)
-                .setTitle("安装包有新版本 " + remoteName)
-                .setMessage("当前安装包 " + (cur.isEmpty() ? "未知" : cur) + "，是否下载并安装？")
-                .setPositiveButton("下载", (d, w) -> downloadApk(remoteName, apkName))
-                .setNegativeButton("稍后", (d, w) -> markApkSeen(remoteCode))
-                .setOnCancelListener(d -> markApkSeen(remoteCode))
-                .show());
+            runOnUiThread(() -> {
+                if (apkDialogShowing) return;
+                apkDialogShowing = true;
+                new AlertDialog.Builder(this)
+                    .setTitle("安装包有新版本 " + remoteName)
+                    .setMessage("当前安装包 " + (cur.isEmpty() ? "未知" : cur) + "，是否下载并安装？")
+                    .setPositiveButton("下载", (d, w) -> downloadApk(remoteName, apkName))
+                    .setNegativeButton("稍后", (d, w) -> markApkSeen(remoteCode))
+                    .setOnCancelListener(d -> markApkSeen(remoteCode))
+                    .setOnDismissListener(d -> apkDialogShowing = false)
+                    .show();
+            });
         }).start();
     }
 
@@ -513,6 +525,26 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
+        final WebView wv = new WebView(this);
+        WebSettings s = wv.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
+        wv.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
+                if (req != null && req.isForMainFrame()) showWebError(view, url);
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                showWebError(view, failingUrl == null ? url : failingUrl);
+            }
+        });
+
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setPadding(16, 10, 8, 10);
@@ -520,19 +552,26 @@ public class MainActivity extends Activity {
         title.setText("GitHub");
         title.setTextSize(15);
         bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        // 备用通道：改用系统浏览器（可能走了不同的代理/VPN），登录态也更稳定
+        Button browser = new Button(this);
+        browser.setText("浏览器");
+        browser.setOnClickListener(v -> {
+            try {
+                String u = wv.getUrl();
+                if (u == null || u.isEmpty() || u.startsWith("data:")) u = url;
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)));
+            } catch (Exception e) {
+                Toast.makeText(this, "无法调起浏览器", Toast.LENGTH_LONG).show();
+            }
+        });
+        bar.addView(browser, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         Button close = new Button(this);
         close.setText("关闭");
         close.setOnClickListener(v -> d.dismiss());
         bar.addView(close, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        WebView wv = new WebView(this);
-        WebSettings s = wv.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(false);
-        s.setAllowFileAccessFromFileURLs(false);
-        s.setAllowUniversalAccessFromFileURLs(false);
-        wv.setWebViewClient(new WebViewClient());
         wv.loadUrl(url);
 
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -543,6 +582,20 @@ public class MainActivity extends Activity {
         try {
             d.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         } catch (Exception ignore) {}
+    }
+
+    /** github.com 不可达时的说明页；账号类页面不能走第三方代理，只能换网络或换浏览器 */
+    private void showWebError(WebView view, String url) {
+        String safe = url == null ? "" : url.replace("&", "&amp;").replace("<", "&lt;");
+        String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+            + "<body style='font-family:sans-serif;padding:24px;line-height:1.75;color:#333'>"
+            + "<h3 style='margin:0 0 10px'>无法连接 github.com</h3>"
+            + "<p>当前网络到不了 github.com，注册/登录页面打不开。</p>"
+            + "<p>账号类页面不能走第三方代理（会把密码和 Cookie 交给代理），可以点右上角「浏览器」"
+            + "改用系统浏览器，或把下面的链接复制到能访问 github.com 的网络。</p>"
+            + "<p style='word-break:break-all;color:#666;font-size:13px'>" + safe + "</p>"
+            + "</body></html>";
+        view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
 
     /** 记录一次下载，供页面“下载记录”展示 */
@@ -639,19 +692,29 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void checkUpdate() {
+    /**
+     * 启动时统一检查：先看页面，页面无需更新再看安装包。
+     * 串行执行，避免两个检查并发各自弹窗；boot.html 的加载不触发。
+     */
+    private void runUpdateChecks() {
+        if (updateChecksStarted) return;
+        updateChecksStarted = true;
         new Thread(() -> {
             String remote = fetchRemoteVersion();
-            if (remote == null || compareVer(remote, localVersion) <= 0) return;
-            runOnUiThread(() -> {
-                pageUpdatePrompted = true;
-                new AlertDialog.Builder(this)
-                    .setTitle("页面有新版本 " + remote)
-                    .setMessage("当前页面 " + localVersion + "，是否更新页面内容？")
-                    .setPositiveButton("更新", (d, w) -> doUpdate(remote))
-                    .setNegativeButton("稍后", null)
-                    .show();
-            });
+            if (remote != null && compareVer(remote, localVersion) > 0) {
+                runOnUiThread(() -> {
+                    pageUpdatePrompted = true;
+                    new AlertDialog.Builder(this)
+                        .setTitle("页面有新版本 " + remote)
+                        .setMessage("当前页面 " + localVersion + "，是否更新页面内容？")
+                        .setPositiveButton("更新", (d, w) -> doUpdate(remote))
+                        .setNegativeButton("稍后", null)
+                        .show();
+                });
+                return;   // 先处理页面更新；安装包下次启动再提示
+            }
+            updateChecksStarted = false;   // 没发现页面更新，允许下次加载重试安装包检查
+            checkApkUpdate(false);
         }).start();
     }
 
