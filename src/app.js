@@ -1308,6 +1308,48 @@ function bindAuthBanner() {
   if (clip) clip.addEventListener('click', openFromClipboard);
 }
 
+/* ---------------------------- 未登录引导 ---------------------------- */
+
+/** 未设置令牌时，进入客户端给一次引导；24 小时内不重复打扰 */
+function maybePromptAuth() {
+  if (TOKEN) return;
+  const last = Number(LS.get('ghl_auth_prompt_at', '0') || 0);
+  if (Date.now() - last < 24 * 3600 * 1000) return;
+  LS.set('ghl_auth_prompt_at', String(Date.now()));
+  setTimeout(openAuthPrompt, 900);
+}
+
+function openAuthPrompt() {
+  const mask = $('#modal');
+  if (!mask || !mask.hidden) return;   // 已有弹窗时不抢
+  mask.hidden = false;
+  mask.innerHTML = `
+    <div class="modal-card">
+      <h3>先设置访问令牌</h3>
+      <p class="hint">未登录时每小时只能调用 60 次，浏览几个仓库就会用完；填入令牌后提升到 5000 次/小时。</p>
+      <ul class="auth-points">
+        <li>令牌只保存在本机，请求时直接发给 GitHub，不经过第三方。</li>
+        <li>只读公开内容勾 <code>public_repo</code>；看私有仓库加 <code>repo</code>；改账号资料加 <code>user</code>。</li>
+        <li>还没有账号可以先注册，注册页在客户端内打开。</li>
+      </ul>
+      <div class="modal-actions">
+        <button class="btn ghost sm" id="authLater">稍后</button>
+        <span class="spacer"></span>
+        <button class="btn sm ghost" id="authSignup">注册账号</button>
+        <button class="btn primary sm" id="authGo">去设置令牌</button>
+      </div>
+    </div>`;
+  const close = () => {
+    mask.hidden = true;
+    mask.innerHTML = '';
+    mask.onclick = null;
+  };
+  $('#authLater').onclick = close;
+  $('#authGo').onclick = () => { close(); openSettings(); };
+  $('#authSignup').onclick = () => openWebPage('https://github.com/signup');
+  mask.onclick = (e) => { if (e.target === mask) close(); };
+}
+
 /* ---------------------------- 翻译 ---------------------------- */
 
 /**
@@ -4760,6 +4802,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#upd').addEventListener('click', applyUpdate);
   if (!location.hash) location.hash = '#/';
   route();
+  maybePromptAuth();
   checkUpdate();
   ensureChannels();
 });
