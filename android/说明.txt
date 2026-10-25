@@ -69,7 +69,7 @@ setTextZoom(100) 固定排版基准，系统字体大小不会影响布局；
 构建环境用本机已有的 C:\build-mv47（JDK 17 + Android SDK 36.1），
 不写注册表、不改 PATH。
 
-签名密钥在 build\ghclient.jks（已被 android/.gitignore 排除，不会提交），
+签名密钥在工程根目录 ghclient.jks（已被 .gitignore 排除，不会提交；已从 build/ 迁出，避免清理构建目录时被重新生成导致签名漂移），
 同一个包名覆盖安装必须用同一个密钥，请勿删除；建议单独备份，
 遗失后旧安装包无法原地升级，只能卸载重装。
 

@@ -1,11 +1,13 @@
 @echo off
 rem Rebuild the APK from assets/index.html. Toolchain: C:\build-mv47 (JDK 17 + Android SDK 36.1).
 rem After updating assets/index.html, bump versionCode/versionName in AndroidManifest.xml first.
+rem The signing keystore lives at the project root (ghclient.jks) so that wiping
+rem build/ cannot regenerate it: a new key would break in-place updates on phones.
 setlocal enabledelayedexpansion
 set BT=C:\build-mv47\sdk\build-tools\36.0.0
 set JDK=C:\build-mv47\jdk-17.0.20.1+1
 set AJ=C:\build-mv47\sdk\platforms\android-36.1\android.jar
-set KS=build\ghclient.jks
+set KS=ghclient.jks
 set KSPASS=ghclient
 cd /d "%~dp0"
 
