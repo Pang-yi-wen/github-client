@@ -1368,3 +1368,39 @@ mark {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
+
+/* ---------- 下载位置与记录 ---------- */
+.dl-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.dl-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: var(--bg-inset); border-radius: 8px;
+}
+.dl-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dl-row-main b {
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dl-row-main .mono { font-size: 11px; }
+
+/* ---------- 账号面板 ---------- */
+.acct-head { display: flex; gap: 10px; align-items: flex-start; }
+.acct-avatar {
+  width: 44px; height: 44px; border-radius: 50%; flex: none;
+  background: var(--bg-inset); object-fit: cover;
+}
+.acct-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.acct-id b { font-size: 13px; }
+.acct-stats { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--fg-muted); }
+.acct-stats b { color: var(--fg); font-weight: 600; }
+.acct-web { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.acct-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.acct-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+.acct-form input {
+  width: 100%; box-sizing: border-box; height: 32px; padding: 0 10px;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; font-size: 12.5px; font-family: inherit; outline: none;
+}
+.acct-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}

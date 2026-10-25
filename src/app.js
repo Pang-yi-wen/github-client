@@ -2172,6 +2172,14 @@ function parseGithubFileUrl(str) {
 async function downloadOne(o, r, ref, path, name) {
   name = name || path.split('/').pop() || 'file';
   if (!ref || ref === 'HEAD') ref = 'main';
+  // 旧版安装包没有文件保存接口：安卓 WebView 里 <a download> 是空操作，会静默丢文件
+  if (window.Android && typeof window.Android.downloadFile !== 'function') {
+    showDlPanel('无法保存文件');
+    updateDlPanel('当前安装包缺少文件保存接口，文件只在内存里下载，不会落盘。请先在设置中更新安装包（1.0.8 起支持）。', 0, null, null);
+    toast('当前安装包版本过旧，文件不会保存，请先更新安装包', 6000);
+    setTimeout(hideDlPanel, 7000);
+    return;
+  }
   showDlPanel('正在选择最快通道…');
   let pick = null;
   try { pick = await pickBestRawUrl(o, r, ref, path); } catch (_) {}
@@ -2210,6 +2218,60 @@ async function downloadOne(o, r, ref, path, name) {
     hideDlPanel();
     toast('下载失败：' + (e.message || e));
   }
+}
+
+/* ------------------------- 下载位置与记录 ------------------------- */
+
+function renderDlWhere() {
+  const hint = $('#dlWhereHint');
+  const A = window.Android;
+  if (hint) {
+    if (A && typeof A.downloadDir === 'function') {
+      let dir = '';
+      try { dir = A.downloadDir() || ''; } catch (_) {}
+      hint.innerHTML = '文件保存在系统下载目录：<code>' + esc(dir || '内部存储/Download') +
+        '</code>。文件名与原文件一致，重名时系统会自动加后缀。';
+    } else {
+      hint.innerHTML = '网页版由浏览器保存到默认下载目录：Chrome/Edge 一般在“下载”列表，Windows 默认在“下载”文件夹。';
+    }
+  }
+  const openDir = $('#dlOpenDir');
+  if (openDir) openDir.onclick = () => {
+    if (A && typeof A.openDownloadsFolder === 'function') A.openDownloadsFolder();
+    else toast('网页版请到浏览器的下载列表查看');
+  };
+  const refresh = $('#dlRefresh');
+  if (refresh) refresh.onclick = renderDlList;
+  renderDlList();
+}
+
+function renderDlList() {
+  const list = $('#dlList');
+  if (!list) return;
+  const A = window.Android;
+  if (!A || typeof A.listDownloads !== 'function') { list.innerHTML = ''; return; }
+  let arr = [];
+  try { arr = JSON.parse(A.listDownloads() || '[]'); } catch (_) {}
+  if (!arr || !arr.length) {
+    list.innerHTML = '<div class="dim" style="font-size:12px;margin-top:8px">还没有下载记录</div>';
+    return;
+  }
+  list.innerHTML = arr.map(it => {
+    const t = Number(it.time) ? new Date(Number(it.time)).toLocaleString('zh-CN') : '';
+    const st = it.done ? '已完成' : '下载中';
+    return `<div class="dl-row">
+      <div class="dl-row-main">
+        <b>${esc(it.name || '')}</b>
+        <span class="dim mono">${esc(t)}${t ? ' · ' : ''}${st}</span>
+      </div>
+      <button class="btn sm ghost" data-open="${Number(it.id) || 0}">打开</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('[data-open]').forEach(b => {
+    b.onclick = () => {
+      try { A.openDownload(Number(b.dataset.open)); } catch (e) { toast('无法打开：' + e.message); }
+    };
+  });
 }
 
 /* ---------------------------- Issues / PR ---------------------------- */
@@ -3046,6 +3108,16 @@ async function viewTools(o, r, ref) {
   </div>
 
   <div class="tool-card">
+    <h3>下载位置</h3>
+    <p class="hint" id="dlWhereHint" style="margin-bottom:8px">正在读取…</p>
+    <div class="modal-actions" style="margin-top:0">
+      <button class="btn sm" id="dlOpenDir">打开下载目录</button>
+      <button class="btn sm ghost" id="dlRefresh">刷新记录</button>
+    </div>
+    <div id="dlList" class="dl-list"></div>
+  </div>
+
+  <div class="tool-card">
     <h3>Release 附件</h3>
     <p class="hint">发行版资源走 objects.githubusercontent.com，多数网络可直接下载；若失败，把链接前面加上中转前缀即可。</p>
   </div>
@@ -3094,6 +3166,125 @@ async function viewTools(o, r, ref) {
     const name = $('#dlName').value.trim() || path.split('/').pop();
     downloadOne(mm[1], mm[2], ref, path, name);
   });
+
+  renderDlWhere();
+}
+
+/* ---------------------------- 账号面板 ---------------------------- */
+
+/** 网页专属操作在客户端内用弹窗 WebView 打开；网页版退回新标签页 */
+function openWebPage(url) {
+  try {
+    if (window.Android && typeof window.Android.openWeb === 'function') {
+      window.Android.openWeb(url);
+      return;
+    }
+  } catch (_) {}
+  window.open(url, '_blank', 'noopener');
+}
+
+const ACCT_WEB = [
+  { t: '注册新账号', u: 'https://github.com/signup' },
+  { t: '密码 / 两步验证', u: 'https://github.com/settings/security' },
+  { t: '用户名 / 注销账号', u: 'https://github.com/settings/admin' },
+  { t: '访问令牌', u: 'https://github.com/settings/tokens' }
+];
+
+async function renderAccount() {
+  const box = $('#acctBox');
+  if (!box) return;
+  if (!TOKEN) {
+    box.innerHTML = '<p class="hint" style="margin:0 0 8px">未设置令牌。注册或登录后可查看资料。</p>'
+      + '<div class="modal-actions" style="margin-top:0">'
+      + '<button class="btn sm" id="acSignup">注册 GitHub 账号</button>'
+      + '<button class="btn sm ghost" id="acLogin">网页登录</button></div>'
+      + '<div class="hint" style="font-size:11.5px;margin-top:8px">注册与登录只在 GitHub 网页提供，点按钮在客户端内打开。</div>';
+    const s = $('#acSignup'); if (s) s.onclick = () => openWebPage('https://github.com/signup');
+    const l = $('#acLogin'); if (l) l.onclick = () => openWebPage('https://github.com/login');
+    return;
+  }
+  box.textContent = '读取中…';
+  try {
+    const u = await gh('/user', { cache: false });
+    meCache = u;
+    const facts = [];
+    if (u.company) facts.push('公司 ' + u.company);
+    if (u.location) facts.push('位置 ' + u.location);
+    if (u.blog) facts.push('主页 ' + u.blog);
+    if (u.created_at) facts.push('加入于 ' + String(u.created_at).slice(0, 10));
+    box.innerHTML = `
+      <div class="acct-head">
+        <img class="acct-avatar" src="${esc(u.avatar_url || '')}" alt="">
+        <div class="acct-id">
+          <b>${esc(u.name || u.login)}</b>
+          <span class="dim mono">@${esc(u.login)}</span>
+          ${u.bio ? `<p class="hint" style="margin:4px 0 0">${esc(u.bio)}</p>` : ''}
+        </div>
+      </div>
+      <div class="acct-stats">
+        <span><b>${u.public_repos || 0}</b> 仓库</span>
+        <span><b>${u.followers || 0}</b> 关注者</span>
+        <span><b>${u.following || 0}</b> 正在关注</span>
+      </div>
+      ${facts.length ? `<div class="hint" style="font-size:11.5px;margin-top:8px">${esc(facts.join(' · '))}</div>` : ''}
+      <div class="modal-actions" style="margin-top:10px">
+        <button class="btn sm" id="acEdit">编辑资料</button>
+      </div>
+      <div class="acct-web">${ACCT_WEB.map(b => `<button class="btn sm ghost" data-web="${b.u}">${b.t}</button>`).join('')}</div>
+      <div class="hint" style="font-size:11.5px;margin-top:8px">
+        改密码、两步验证、改用户名、注销账号、管理令牌只在 GitHub 网页提供，上面的按钮在客户端内打开对应页面（需当前网络能访问 github.com）。
+      </div>`;
+    $('#acEdit').onclick = () => acctEditForm(u);
+    box.querySelectorAll('[data-web]').forEach(b => { b.onclick = () => openWebPage(b.dataset.web); });
+  } catch (e) {
+    box.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+  }
+}
+
+function acctEditForm(u) {
+  const box = $('#acctBox');
+  if (!box) return;
+  box.innerHTML = `
+    <div class="acct-form">
+      <label>昵称<input id="acName" type="text" value="${esc(u.name || '')}" placeholder="显示名称"></label>
+      <label>简介<input id="acBio" type="text" value="${esc(u.bio || '')}" placeholder="一句话介绍"></label>
+      <label>公司<input id="acCo" type="text" value="${esc(u.company || '')}"></label>
+      <label>位置<input id="acLoc" type="text" value="${esc(u.location || '')}"></label>
+      <label>主页<input id="acBlog" type="text" value="${esc(u.blog || '')}" placeholder="https://"></label>
+      <label>Twitter<input id="acTw" type="text" value="${esc(u.twitter_username || '')}"></label>
+    </div>
+    <div class="modal-actions" style="margin-top:10px">
+      <span class="dim" id="acMsg" style="font-size:11.5px"></span>
+      <span class="spacer"></span>
+      <button class="btn sm ghost" id="acCancel">取消</button>
+      <button class="btn primary sm" id="acSave">保存</button>
+    </div>
+    <div class="hint" style="font-size:11.5px;margin-top:8px">
+      修改资料需要令牌带 <code>user</code> 作用域；只有 <code>repo</code> 的令牌会提示权限不足。
+    </div>`;
+  $('#acCancel').onclick = renderAccount;
+  $('#acSave').onclick = async () => {
+    const body = {
+      name: $('#acName').value.trim(),
+      bio: $('#acBio').value.trim(),
+      company: $('#acCo').value.trim(),
+      location: $('#acLoc').value.trim(),
+      blog: $('#acBlog').value.trim(),
+      twitter_username: $('#acTw').value.trim()
+    };
+    $('#acMsg').textContent = '保存中…';
+    try {
+      const r = await gh('/user', { method: 'PATCH', body: body, cache: false });
+      meCache = r;
+      toast('资料已更新');
+      renderAccount();
+    } catch (e) {
+      const hint = (e.status === 403 || e.status === 404)
+        ? '令牌缺少 user 作用域，无法修改资料。请重新生成带 user 的令牌。'
+        : e.message;
+      $('#acMsg').innerHTML = '<span style="color:var(--red)">' + esc(hint) + '</span>';
+    }
+  };
 }
 
 /* ---------------------------- 设置面板 ---------------------------- */
@@ -3127,12 +3318,12 @@ async function openSettings() {
         </p>
         <div class="tk-links">
           <a class="btn sm" id="tkGen"
-             href="https://github.com/settings/tokens/new?scopes=public_repo,read:org&description=GitHub%20Web%20Client"
+             href="https://github.com/settings/tokens/new?scopes=user,public_repo,read:org&description=GitHub%20Web%20Client"
              target="_blank" rel="noopener">去 GitHub 生成令牌 ↗</a>
           <button class="btn sm ghost" id="tkCmd" title="复制 gh 命令">复制 gh 命令</button>
         </div>
         <p class="hint" style="font-size:11.5px;margin-top:8px">
-          只需要读公开内容的话勾 <code>public_repo</code> 就够；要看私有仓库再加 <code>repo</code>。
+          只需要读公开内容的话勾 <code>public_repo</code> 就够；要看私有仓库再加 <code>repo</code>；要在客户端内改资料再勾 <code>user</code>。
           若链接打不开，说明 github.com 在当前网络不可达；装了 gh CLI 的话，在终端跑 <code>gh auth token</code> 可直接取出已有令牌。
         </p>
         <input id="tk" type="password" placeholder="ghp_… 或 github_pat_…" value="${esc(TOKEN)}" spellcheck="false">
@@ -3142,6 +3333,11 @@ async function openSettings() {
           <button class="btn primary sm" id="tkSave">保存令牌</button>
         </div>
         <div id="tkStatus" class="dim" style="font-size:12px;margin-top:8px"></div>
+      </div>
+
+      <div class="set-block">
+        <h4>账号</h4>
+        <div id="acctBox" class="dim" style="font-size:12px">加载中…</div>
       </div>
 
       <div class="set-block">
@@ -3377,8 +3573,10 @@ async function openSettings() {
 
   $('#tkCmd').addEventListener('click', () => copyText('gh auth token'));
 
-  $('#tkGen').addEventListener('click', () => {
-    toast('已在新标签页打开。若页面一直空白，说明 github.com 在当前网络不可达', 5000);
+  $('#tkGen').addEventListener('click', (e) => {
+    e.preventDefault();
+    openWebPage('https://github.com/settings/tokens/new?scopes=user,public_repo,read:org&description=GitHub%20Web%20Client');
+    toast('已在客户端内打开；若一直空白，说明 github.com 在当前网络不可达', 5000);
   });
 
   $('#tkSave').addEventListener('click', async () => {
@@ -3399,6 +3597,8 @@ async function openSettings() {
       $('#tkStatus').innerHTML = '<span style="color:var(--red)">' + esc(e.message) + '</span>';
     }
   });
+
+  renderAccount();
 
   $('#pxClear').addEventListener('click', () => {
     LS.set('ghl_proxy', '');

@@ -2,11 +2,13 @@ package com.pangyiwen.ghclient;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.app.DownloadManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -27,8 +29,10 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -107,6 +111,18 @@ public class MainActivity extends Activity {
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);               // 不显示系统缩放按钮，用右下角自定义控件
         wv.addJavascriptInterface(this, "Android");
+        // 兜底：页面直接触发的 http(s) 下载交给系统下载器；blob: 在 WebView 里无法落盘
+        wv.setDownloadListener((url, ua, cd, mime, len) -> {
+            if (url == null) return;
+            if (url.startsWith("blob:")) {
+                runOnUiThread(() -> Toast.makeText(this,
+                    "该下载方式需要新版安装包，请先更新", Toast.LENGTH_LONG).show());
+                return;
+            }
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                downloadFile(url, android.webkit.URLUtil.guessFileName(url, cd, mime));
+            }
+        });
         // WebView 默认不弹 confirm/alert，页面里的删除确认会静默失败，这里补齐
         wv.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -309,6 +325,7 @@ public class MainActivity extends Activity {
             long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
             String name = fileNames.remove(id);
             if (name == null) return;
+            markDownloadDone(id);
             Toast.makeText(MainActivity.this, "已保存到下载目录：" + name, Toast.LENGTH_LONG).show();
         }
     };
@@ -419,11 +436,142 @@ public class MainActivity extends Activity {
             long id = dm.enqueue(r);
             final String shown = name;
             fileNames.put(id, shown);
+            addDownloadRecord(id, shown);
             runOnUiThread(() -> Toast.makeText(this,
                 "已开始下载：" + shown + "（进度见通知栏）", Toast.LENGTH_LONG).show());
         } catch (Exception e) {
             runOnUiThread(() -> Toast.makeText(this, "下载失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
         }
+    }
+
+    /** 公共下载目录的绝对路径，供页面提示“文件保存在哪里” */
+    @JavascriptInterface
+    public String downloadDir() {
+        try {
+            return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath();
+        } catch (Exception e) {
+            return "内部存储/Download";
+        }
+    }
+
+    /** 下载记录（最近 50 条），字段 id/name/time/done */
+    @JavascriptInterface
+    public String listDownloads() {
+        return getSharedPreferences(PREF, MODE_PRIVATE).getString("downloads", "[]");
+    }
+
+    /** 打开已下载文件：用 DownloadManager 的内容 URI 交给系统应用 */
+    @JavascriptInterface
+    public void openDownload(long id) {
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            final Uri uri = dm.getUriForDownloadedFile(id);
+            if (uri == null) {
+                runOnUiThread(() -> Toast.makeText(this, "文件不存在或已被移动", Toast.LENGTH_LONG).show());
+                return;
+            }
+            String mime = null;
+            try { mime = dm.getMimeTypeForDownloadedFile(id); } catch (Exception ignore) {}
+            if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, mime);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                startActivity(i);
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "没有可打开该文件的应用", Toast.LENGTH_LONG).show());
+            }
+        } catch (Exception e) {
+            runOnUiThread(() -> Toast.makeText(this, "无法打开：" + e.getMessage(), Toast.LENGTH_LONG).show());
+        }
+    }
+
+    /** 尽力打开系统的“下载”目录；部分机型不支持则提示路径 */
+    @JavascriptInterface
+    public void openDownloadsFolder() {
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload"),
+                    "vnd.android.document/directory");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            runOnUiThread(() -> Toast.makeText(this, "请到 " + downloadDir() + " 查看", Toast.LENGTH_LONG).show());
+        }
+    }
+
+    /** 在客户端内用弹窗 WebView 打开 GitHub 网页（注册/密码/2FA/用户名/注销/令牌） */
+    @JavascriptInterface
+    public void openWeb(String url) {
+        if (url == null) return;
+        if (!url.startsWith("https://github.com/") && !url.equals("https://github.com")) return;
+        runOnUiThread(() -> showWebDialog(url));
+    }
+
+    private void showWebDialog(String url) {
+        final Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Light_NoActionBar);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setPadding(16, 10, 8, 10);
+        TextView title = new TextView(this);
+        title.setText("GitHub");
+        title.setTextSize(15);
+        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button close = new Button(this);
+        close.setText("关闭");
+        close.setOnClickListener(v -> d.dismiss());
+        bar.addView(close, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        WebView wv = new WebView(this);
+        WebSettings s = wv.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
+        wv.setWebViewClient(new WebViewClient());
+        wv.loadUrl(url);
+
+        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(wv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        d.setContentView(root);
+        d.setOnDismissListener(x -> { try { wv.destroy(); } catch (Exception ignore) {} });
+        d.show();
+        try {
+            d.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        } catch (Exception ignore) {}
+    }
+
+    /** 记录一次下载，供页面“下载记录”展示 */
+    private void addDownloadRecord(long id, String name) {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREF, MODE_PRIVATE);
+            JSONArray old = new JSONArray(sp.getString("downloads", "[]"));
+            JSONArray out = new JSONArray();
+            JSONObject rec = new JSONObject();
+            rec.put("id", id);
+            rec.put("name", name);
+            rec.put("time", System.currentTimeMillis());
+            rec.put("done", false);
+            out.put(rec);
+            for (int i = 0; i < old.length() && out.length() < 50; i++) out.put(old.get(i));
+            sp.edit().putString("downloads", out.toString()).apply();
+        } catch (Exception ignore) {}
+    }
+
+    private void markDownloadDone(long id) {
+        try {
+            SharedPreferences sp = getSharedPreferences(PREF, MODE_PRIVATE);
+            JSONArray arr = new JSONArray(sp.getString("downloads", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                if (o.optLong("id") == id) o.put("done", true);
+            }
+            sp.edit().putString("downloads", arr.toString()).apply();
+        } catch (Exception ignore) {}
     }
 
     /** DownloadManager 只接受单个地址，并行 HEAD 探明第一个可用的 */
