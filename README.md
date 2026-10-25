@@ -208,6 +208,28 @@ Worker 仅转发白名单内的 GitHub 域名，避免被用作开放代理；�
 
 Nginx 亦可替代：将 `/https://api.github.com/...` 转发至上游，并补充 `Access-Control-Allow-Origin` 与 `Access-Control-Allow-Headers` 响应头。
 
+## 安卓客户端
+
+`android/` 目录是同一客户端的安卓外壳：WebView 加载内置的单文件页面，页面与网页版逐字节相同，功能无删减。
+
+| 项 | 说明 |
+| --- | --- |
+| 包名 | `com.pangyiwen.ghclient` |
+| 最低系统 | Android 7.0（API 24） |
+| 构建 | 双击 `android/build-apk.bat`，产物为 `GitHubClient.apk` |
+| 工具链 | 本机 `C:\build-mv47`（JDK 17 + Android SDK 36.1），不写注册表、不改 PATH |
+
+两条更新通道，均从本仓库拉取：
+
+| 通道 | 触发物 | 行为 |
+| --- | --- | --- |
+| 页面更新 | 仓库 `VERSION` 变化 | 弹窗确认后下载最新 `GitHub.html`，就地替换后刷新 |
+| 安装包更新 | `android/apk/version.json` 的 versionCode 升高 | 弹窗确认后下载安装包，完成后自动调起系统安装器 |
+
+安装包更新需要用户在系统设置中授予「安装未知应用」（Android 8.0+），首次更新时按提示引导开启。
+
+签名密钥位于 `android/build/ghclient.jks`，不入库；同一个包名覆盖安装必须使用同一密钥，遗失后无法原地升级，需单独备份。
+
 ## 构建
 
 修改 `src/` 或 `vendor/` 后重新生成单文件：
@@ -229,6 +251,8 @@ src/shell.html        外壳模板
 src/style.css         样式
 src/app.js            应用逻辑
 vendor/               marked、highlight.js
+android/              安卓客户端工程（WebView 外壳）
+android/apk/          已签名安装包与版本清单，供应用内更新拉取
 docs/screenshots/     界面截图
 scripts/push-api.js   git 通道不可用时经 API 推送（维护用）
 ```

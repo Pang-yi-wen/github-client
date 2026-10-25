@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">GitHub 客户端</string>
+    <color name="bg">#0d1117</color>
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+</resources>

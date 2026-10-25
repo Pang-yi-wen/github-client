@@ -1,0 +1,4 @@
+build/
+*.jks
+*.idsig
+*.apk.tmp

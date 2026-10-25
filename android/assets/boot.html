@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<script>
+// APK 内置版关闭自动更新：版本随安装包分发，更新方式为重新出包。
+// 先于 index.html 执行，因此应用启动时的检查会读到已关闭。
+try { localStorage.setItem('ghl_upd_on', '0'); } catch (e) {}
+location.replace('index.html');
+</script>
+</head>
+<body></body>
+</html>
