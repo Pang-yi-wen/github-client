@@ -1,4 +1,4 @@
-GitHub 客户端 APK（v1.0.1）
+GitHub 客户端 APK（v1.0.2）
 =============================
 
 把 github-client 的单文件网页打包成安卓应用，网页内置在安装包里，
@@ -7,12 +7,12 @@ GitHub 客户端 APK（v1.0.1）
 
 安装
 ----
-1. 把 GitHub客户端-v1.0.1.apk 传到手机（数据线、微信文件传输等均可），
-   也可从仓库 android/apk/ 目录直接下载 GitHubClient-1.0.1.apk。
+1. 把 GitHub客户端-v1.0.2.apk 传到手机（数据线、微信文件传输等均可），
+   也可从仓库 android/apk/ 目录直接下载 GitHubClient-1.0.2.apk。
 2. 点击安装；系统提示「未知来源应用」时允许本次安装。
 3. 首次打开后在设置里填入 GitHub 令牌，与网页版相同。
 
-包信息：com.pangyiwen.ghclient，versionCode 10001，minSdk 24（Android 7.0+）。
+包信息：com.pangyiwen.ghclient，versionCode 10002，minSdk 24（Android 7.0+）。
 图标为自适应图标（Android 8.0+），旧系统回退为矢量图标。
 
 缩放
