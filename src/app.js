@@ -3216,7 +3216,7 @@ async function openSettings() {
       <div class="set-block">
         <h4>自动更新</h4>
         <p class="hint" style="margin-bottom:10px">
-          当前版本 <b id="updVer"></b><span id="updShell"></span>。每隔最多 6 小时读取一次来源仓库的 <code>VERSION</code> 文件，
+          当前版本 <b id="updVer"></b>。每隔最多 6 小时读取一次来源仓库的 <code>VERSION</code> 文件，
           发现新版本时顶栏显示箭头，点击即更新。http(s) 页面直接热替换；本地 file:// 页面则下载新文件，
           替换原文件后重新打开。
         </p>
@@ -3313,16 +3313,6 @@ async function openSettings() {
 
   const updVer = $('#updVer');
   if (updVer) updVer.textContent = APP_VERSION;
-
-  // 安卓壳版本由外壳经 JS 接口提供，网页版无此对象时留空
-  const updShell = $('#updShell');
-  if (updShell) {
-    let sv = '';
-    try {
-      if (window.Android && window.Android.shellVersion) sv = window.Android.shellVersion() || '';
-    } catch (_) {}
-    if (sv) updShell.textContent = ' · 客户端 ' + sv;
-  }
 
   const refreshUpdStatus = () => {
     const el = $('#updStatus');
