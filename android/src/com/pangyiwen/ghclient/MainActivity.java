@@ -40,6 +40,14 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.HashMap;
 import java.util.regex.Pattern;
@@ -304,11 +312,7 @@ public class MainActivity extends Activity {
 
     private void checkApkUpdate() {
         new Thread(() -> {
-            String t = null;
-            for (String host : RAW) {
-                t = fetchText(host + APK_META_PATH);
-                if (t != null) break;
-            }
+            String t = fetchTextRace(candidateUrls(APK_META_PATH.substring(SELF.length())), 12000);
             if (t == null) return;
             final long remoteCode;
             final String remoteName, apkName;
@@ -394,23 +398,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** DownloadManager 只接受单个地址，先跨源探明第一个可用的 */
+    /** DownloadManager 只接受单个地址，并行 HEAD 探明第一个可用的 */
     private String pickApkUrl(String apkName) {
         if (apkName == null || apkName.isEmpty()) return null;
-        for (String host : RAW) {
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(host + SELF + "/main/android/apk/" + apkName).openConnection();
-                c.setRequestMethod("HEAD");
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(8000);
-                if (c.getResponseCode() == 200) return host + SELF + "/main/android/apk/" + apkName;
-            } catch (Exception ignore) {
-            } finally {
-                if (c != null) c.disconnect();
-            }
-        }
-        return null;
+        return firstReachable(candidateUrls("/main/android/apk/" + apkName), 8000);
     }
 
     /* ------------------------- 页面落地与更新 ------------------------- */
@@ -483,14 +474,9 @@ public class MainActivity extends Activity {
     private void doUpdate(String remote) {
         Toast.makeText(this, "正在下载 " + remote, Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            String html = null;
-            for (String host : RAW) {
-                html = fetchText(host + SELF + "/main/GitHub.html");
-                // 校验：确实是完整的单文件应用再落盘，避免把错误页写进去
-                if (html != null && html.length() > 50000 && html.contains("GitHub")) break;
-                html = null;
-            }
-            if (html == null) {
+            // 并行竞速取最快通道的页面，校验完整后再落盘，避免把错误页写进去
+            String html = fetchTextRace(candidateUrls("/main/GitHub.html"), 20000);
+            if (html == null || html.length() <= 50000 || !html.contains("GitHub")) {
                 runOnUiThread(() -> Toast.makeText(this, "更新失败：无法获取新版本文件", Toast.LENGTH_LONG).show());
                 return;
             }
@@ -517,13 +503,10 @@ public class MainActivity extends Activity {
     }
 
     private String fetchRemoteVersion() {
-        for (String host : RAW) {
-            String t = fetchText(host + SELF + "/main/VERSION");
-            if (t == null) continue;
-            String v = t.trim().split("\n")[0].trim();
-            if (!v.isEmpty()) return v;
-        }
-        return null;
+        String t = fetchTextRace(candidateUrls("/main/VERSION"), 12000);
+        if (t == null) return null;
+        String v = t.trim().split("\n")[0].trim();
+        return v.isEmpty() ? null : v;
     }
 
     private String fetchText(String url) {
@@ -541,6 +524,103 @@ public class MainActivity extends Activity {
             return new String(bos.toByteArray(), "UTF-8");
         } catch (Exception ignore) {
             return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private String fetchText(String url, int connectMs, int readMs) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(connectMs);
+            c.setReadTimeout(readMs);
+            if (c.getResponseCode() != 200) return null;
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            return new String(bos.toByteArray(), "UTF-8");
+        } catch (Exception ignore) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /** 构造仓库内某文件的全部候选 URL（含 jsDelivr CDN），与网页版镜像池一致 */
+    private String[] candidateUrls(String pathAfterRepo) {
+        ArrayList<String> out = new ArrayList<>();
+        String branch = "main";
+        String rest = pathAfterRepo;
+        if (rest.startsWith("/" + branch + "/")) rest = rest.substring(branch.length() + 2);
+        out.add("https://cdn.jsdelivr.net/gh/" + SELF + "@" + branch + "/" + rest);
+        for (String host : RAW) out.add(host + SELF + pathAfterRepo);
+        return out.toArray(new String[0]);
+    }
+
+    /** 并行 GET 所有候选，返回第一个成功响应的文本；全部失败返回 null（首响即胜，其余取消） */
+    private String fetchTextRace(String[] urls, int timeoutMs) {
+        if (urls == null || urls.length == 0) return null;
+        ExecutorService ex = Executors.newCachedThreadPool();
+        AtomicReference<String> out = new AtomicReference<>(null);
+        AtomicBoolean won = new AtomicBoolean(false);
+        AtomicInteger pending = new AtomicInteger(urls.length);
+        CountDownLatch latch = new CountDownLatch(1);
+        for (final String u : urls) {
+            ex.submit(() -> {
+                if (won.get()) return;
+                String t = fetchText(u, timeoutMs, timeoutMs);
+                if (t != null && won.compareAndSet(false, true)) {
+                    out.set(t);
+                    latch.countDown();
+                    return;
+                }
+                if (pending.decrementAndGet() == 0 && !won.get()) latch.countDown();
+            });
+        }
+        try { latch.await(timeoutMs + 4000, TimeUnit.MILLISECONDS); } catch (InterruptedException ignore) {}
+        won.set(true);
+        ex.shutdownNow();
+        return out.get();
+    }
+
+    /** 并行 HEAD 探测，返回第一个可达（200）的 URL；全部失败返回 null */
+    private String firstReachable(String[] urls, int timeoutMs) {
+        if (urls == null || urls.length == 0) return null;
+        ExecutorService ex = Executors.newCachedThreadPool();
+        AtomicReference<String> out = new AtomicReference<>(null);
+        AtomicBoolean won = new AtomicBoolean(false);
+        AtomicInteger pending = new AtomicInteger(urls.length);
+        CountDownLatch latch = new CountDownLatch(1);
+        for (final String u : urls) {
+            ex.submit(() -> {
+                if (won.get()) return;
+                if (httpHeadOk(u, timeoutMs) && won.compareAndSet(false, true)) {
+                    out.set(u);
+                    latch.countDown();
+                    return;
+                }
+                if (pending.decrementAndGet() == 0 && !won.get()) latch.countDown();
+            });
+        }
+        try { latch.await(timeoutMs + 4000, TimeUnit.MILLISECONDS); } catch (InterruptedException ignore) {}
+        won.set(true);
+        ex.shutdownNow();
+        return out.get();
+    }
+
+    private boolean httpHeadOk(String url, int timeoutMs) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestMethod("HEAD");
+            c.setConnectTimeout(timeoutMs);
+            c.setReadTimeout(timeoutMs);
+            return c.getResponseCode() == 200;
+        } catch (Exception ignore) {
+            return false;
         } finally {
             if (c != null) c.disconnect();
         }
