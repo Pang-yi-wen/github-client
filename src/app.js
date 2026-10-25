@@ -3015,6 +3015,8 @@ function composeSearchQuery(base, type, f) {
   if (type === 'repositories' || type === 'code') add('language', f.lang);
 
   if (type === 'repositories') {
+    // GitHub 没有“有 APK”限定符，用 topic 近似：android-app / f-droid / android
+    if (f.android) add('topic', f.android);
     if (f.stars) add('stars', '>=' + f.stars);
     const d = pushedDate(f.pushed);
     if (d) add('pushed', '>=' + d);
@@ -3059,6 +3061,9 @@ function searchFilterBar(type, f, prefix) {
       ['updated', '最近更新'], ['help-wanted-issues', '待协助最多']
     ], f.sort)));
     parts.push(box('语言', select('lang', SEARCH_LANGS, f.lang)));
+    parts.push(box('Android', select('android', [
+      ['', '不限'], ['android-app', 'Android 应用'], ['f-droid', 'F-Droid 应用'], ['android', 'Android 项目']
+    ], f.android)));
     parts.push(box('Star', select('stars', [
       ['', '不限'], ['50', '≥ 50'], ['500', '≥ 500'], ['5000', '≥ 5000'], ['20000', '≥ 2 万']
     ], f.stars)));
@@ -3098,7 +3103,7 @@ function searchFilterBar(type, f, prefix) {
 /** 筛选控件改动后写回 URL，交给路由重绘 */
 function bindSearchFilters() {
   const map = {
-    'f-sort': 'sort', 'f-lang': 'lang', 'f-stars': 'stars', 'f-pushed': 'pushed',
+    'f-sort': 'sort', 'f-lang': 'lang', 'f-android': 'android', 'f-stars': 'stars', 'f-pushed': 'pushed',
     'f-repo': 'repo', 'f-path': 'path', 'f-utype': 'utype', 'f-repos': 'repos',
     'f-state': 'state', 'f-kind': 'kind', 'f-label': 'label'
   };
@@ -3173,6 +3178,7 @@ async function viewSearch(q, type, params) {
     sort: params.get('sort') || '',
     order: params.get('order') || 'desc',
     lang: params.get('lang') || '',
+    android: params.get('android') || '',
     stars: params.get('stars') || '',
     pushed: params.get('pushed') || '',
     repo: params.get('repo') || '',
@@ -4922,7 +4928,7 @@ const SEARCH_TYPES = [
 
 function emptyFilters() {
   return {
-    sort: '', lang: '', stars: '', pushed: '', repo: '', path: '',
+    sort: '', lang: '', android: '', stars: '', pushed: '', repo: '', path: '',
     label: '', utype: '', repos: '', state: '', kind: ''
   };
 }
