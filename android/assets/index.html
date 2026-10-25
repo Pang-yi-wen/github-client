@@ -2756,7 +2756,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.14';
+const APP_VERSION = '1.0.15';
 'use strict';
 
 /* ============================================================
@@ -3598,6 +3598,17 @@ async function applyUpdate() {
     toast('更新失败：' + e.message);
     if (btn) { btn.disabled = false; btn.textContent = label; }
   }
+}
+
+/** 读取安装包版本清单，用于在设置里区分“页面版本”和“安装包版本” */
+async function fetchApkMeta() {
+  const { owner, repo, branch } = updRepo();
+  const seg = owner + '/' + repo + '/' + branch + '/android/apk/version.json';
+  const txt = await fetchFirst(seg, t => {
+    try { const j = JSON.parse(t); return !!(j && j.versionName); } catch (_) { return false; }
+  }, 10000);
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch (_) { return null; }
 }
 
 /* ---------------------------- Markdown ---------------------------- */
@@ -6426,8 +6437,8 @@ async function openSettings() {
     try { if (window.Android && window.Android.shellVersion) sv = window.Android.shellVersion() || ''; } catch (_) {}
     if (sv && cmpVer(sv, APP_VERSION) < 0) {
       shellHint.style.display = '';
-      shellHint.innerHTML = '安装包 ' + esc(sv) + ' 落后于页面 ' + esc(APP_VERSION) +
-        '。更新提示针对安装包，点下方「检查更新」下载并安装。';
+      shellHint.innerHTML = '当前安装包 ' + esc(sv) + '，页面 ' + esc(APP_VERSION) +
+        '。页面热更不会替换安装包，点下方「检查更新」查看两者状态。';
     }
   }
 
@@ -6469,13 +6480,30 @@ async function openSettings() {
     const st = $('#updStatus');
     if (st) st.textContent = '检查中…';
     const r = await checkUpdate(true);
-    if (r) {
-      if (st) st.textContent = '发现页面新版本 ' + r.version + '，点击顶栏箭头更新';
-      toast('发现页面新版本 ' + r.version);
-    } else {
-      if (st) st.textContent = '页面已是最新版本 ' + APP_VERSION;
-    }
-    // 安卓壳：同时检查安装包（手动触发，忽略“已提示过”）
+    const pageMsg = r
+      ? '页面有新版本 ' + r.version + '，点击顶栏箭头更新'
+      : '页面 ' + APP_VERSION + ' 已是最新';
+
+    // 安装包状态与页面分开显示，避免“页面已最新”被误读成安装包也最新
+    let apkMsg = '';
+    try {
+      const sv = (window.Android && window.Android.shellVersion) ? (window.Android.shellVersion() || '') : '';
+      if (sv) {
+        const meta = await fetchApkMeta();
+        if (meta && meta.versionName) {
+          apkMsg = cmpVer(sv, meta.versionName) < 0
+            ? '；安装包 ' + sv + ' 可升级到 ' + meta.versionName
+            : '；安装包 ' + sv + ' 已是最新';
+        } else {
+          apkMsg = '；安装包 ' + sv;
+        }
+      }
+    } catch (_) {}
+
+    if (st) st.textContent = pageMsg + apkMsg;
+    if (r) toast('发现页面新版本 ' + r.version);
+
+    // 安卓壳：有新版会弹安装包提示（手动触发，忽略“已提示过”）
     try {
       if (window.Android && typeof window.Android.checkApkUpdate === 'function') window.Android.checkApkUpdate();
     } catch (_) {}
