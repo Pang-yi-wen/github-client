@@ -2766,7 +2766,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.23';
+const APP_VERSION = '1.0.24';
 'use strict';
 
 /* ============================================================
@@ -4439,11 +4439,22 @@ async function getBrowserTranslator() {
   return browserTr;
 }
 
+/** 带超时的 fetch：某条通道卡住时尽快失败，换下一条 */
+async function fetchT(url, opts, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms || 12000);
+  try {
+    return await fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** MyMemory：单次 500 字符上限 */
 async function myMemoryTranslate(text) {
   const url = 'https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=' +
     encodeURIComponent(text.slice(0, 480));
-  const res = await fetch(url);
+  const res = await fetchT(url, {}, 12000);
   if (res.status === 429) throw new Error('MyMemory 触发限流或当日额度已用尽');
   if (!res.ok) throw new Error('MyMemory HTTP ' + res.status);
   const j = await res.json();
@@ -4470,11 +4481,11 @@ async function libreTranslate(text) {
   const body = { q: text, source: 'en', target: 'zh', format: 'text' };
   if (key) body.api_key = key;
 
-  const res = await fetch(base + '/translate', {
+  const res = await fetchT(base + '/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
-  });
+  }, 15000);
   if (!res.ok) throw new Error('LibreTranslate HTTP ' + res.status);
   const j = await res.json();
   if (!j || !j.translatedText) throw new Error('LibreTranslate 无返回');
@@ -4483,7 +4494,7 @@ async function libreTranslate(text) {
 
 /** 腾讯翻译：无需密钥，支持批量，单次可处理数千字符 */
 async function tencentTranslate(list) {
-  const res = await fetch('https://transmart.qq.com/api/imt', {
+  const res = await fetchT('https://transmart.qq.com/api/imt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -4493,7 +4504,7 @@ async function tencentTranslate(list) {
       source: { lang: 'en', text_list: list },
       target: { lang: 'zh' }
     })
-  });
+  }, 10000);
   if (!res.ok) throw new Error('腾讯翻译 HTTP ' + res.status);
   const j = await res.json();
   if (j && j.header && j.header.ret_code !== 'succ') {
@@ -4506,9 +4517,9 @@ async function tencentTranslate(list) {
   return out;
 }
 
-/** B 站 Index-Translate：OpenAI 兼容接口，免密钥，单条可处理长文本 */
-async function bilibiliTranslate(text) {
-  const res = await fetch('https://index-translate.bilibili.com/v1/chat/completions', {
+/** B 站 Index-Translate：OpenAI 兼容接口，免密钥 */
+async function bilibiliChat(system, user, ms) {
+  const res = await fetchT('https://index-translate.bilibili.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -4517,19 +4528,43 @@ async function bilibiliTranslate(text) {
     body: JSON.stringify({
       model: 'Index-Translate-35B-A3B',
       messages: [
-        { role: 'system', content: '你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。' },
-        { role: 'user', content: text }
+        { role: 'system', content: system },
+        { role: 'user', content: user }
       ],
       temperature: 0,
       stream: false
     })
-  });
+  }, ms || 25000);
   if (res.status === 429) throw new Error('B站翻译限流');
   if (!res.ok) throw new Error('B站翻译 HTTP ' + res.status);
   const j = await res.json();
   const out = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
   if (!out) throw new Error('B站翻译无返回');
   return String(out).trim();
+}
+
+async function bilibiliTranslate(text) {
+  return bilibiliChat('你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。', text);
+}
+
+/** 一次请求翻多条：编号输入、编号输出；解析失败逐条重试 */
+async function bilibiliTranslateBatch(list) {
+  if (!list.length) return [];
+  if (list.length === 1) return [await bilibiliTranslate(list[0])];
+  const numbered = list.map((s, i) => (i + 1) + '. ' + s).join('\n');
+  const out = await bilibiliChat(
+    '你是翻译引擎。逐条把编号行译成简体中文，保持编号与条数，只输出译文行，不要解释、不要合并。',
+    numbered, 30000);
+  const map = new Map();
+  String(out).split('\n').forEach((line) => {
+    const m = line.match(/^\s*(\d+)\s*[.、)]\s*(.+?)\s*$/);
+    if (m) map.set(Number(m[1]), m[2]);
+  });
+  if (map.size === list.length) return list.map((_, i) => map.get(i + 1) || '');
+  // 编号解析失败时退回逐条，保证结果不乱序
+  const res = [];
+  for (const s of list) res.push(await bilibiliTranslate(s));
+  return res;
 }
 
 /** Pollinations：免密钥的文本生成接口，用作翻译通道。慢，适合兜底 */
@@ -4565,6 +4600,8 @@ async function myMemoryLong(s) {
 }
 
 let lastTrErr = null;
+/** 通道失败后的冷却截止时间：避免每批都先去撞一条已经挂掉的通道 */
+const trDead = new Map();
 
 /** 通道顺序：选定的提到最前，其余仍作兜底 */
 const TR_MODES = {
@@ -4597,11 +4634,7 @@ async function viaChannel(ch, list) {
 
   if (ch === 'tencent') return tencentTranslate(list);
 
-  if (ch === 'bilibili') {
-    const out = [];
-    for (const s of list) out.push(await bilibiliTranslate(s));
-    return out;
-  }
+  if (ch === 'bilibili') return bilibiliTranslateBatch(list);
 
   if (ch === 'pollinations') {
     const out = [];
@@ -4630,6 +4663,7 @@ async function translateBatch(items) {
   lastTrErr = null;
 
   for (const ch of trOrder()) {
+    if ((trDead.get(ch) || 0) > Date.now()) continue;
     const pending = [];
     out.forEach((v, i) => { if (v === null) pending.push(i); });
     if (!pending.length) break;
@@ -4639,8 +4673,10 @@ async function translateBatch(items) {
       res.forEach((t, k) => {
         if (t !== null && t !== undefined && String(t).trim()) out[pending[k]] = t;
       });
+      trDead.delete(ch);
     } catch (e) {
       lastTrErr = e;
+      trDead.set(ch, Date.now() + 120000);   // 失败后 2 分钟内不再优先尝试
     }
   }
 
@@ -4705,7 +4741,7 @@ function splitSentences(text, max) {
  */
 async function translateBlock(text, onTick) {
   const bt = await getBrowserTranslator();
-  const maxChars = bt ? 1600 : 1200;
+  const maxChars = bt ? 1600 : 2400;
 
   const lines = text.split('\n');
   const jobs = [];
@@ -4740,7 +4776,7 @@ async function translateBlock(text, onTick) {
   let len = 0;
   units.forEach((u) => {
     const add = u.text.length + 2;
-    if (cur.length && (len + add > maxChars || cur.length >= 8)) {
+    if (cur.length && (len + add > maxChars || cur.length >= (bt ? 8 : 12))) {
       batches.push(cur);
       cur = [];
       len = 0;
@@ -4793,7 +4829,7 @@ async function translateMarkdown(md, onTick, onPart) {
 
   const out = parts.map((p) => p.text);
   const bt = await getBrowserTranslator();
-  const limit = Math.min(bt ? 1 : 3, total);
+  const limit = Math.min(bt ? 1 : 4, total);
   let cursor = 0;
   let done = 0;
   let ok = 0;
