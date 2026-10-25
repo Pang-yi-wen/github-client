@@ -51,9 +51,14 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
 
     private static final String SELF = "Pang-yi-wen/github-client";
-    /** raw 通道候选，与网页版一致；国内网络下前一个不通时依次尝试 */
+    /** raw 通道候选，与网页版一致；国内网络下前一个不通时依次尝试多个代理镜像 */
     private static final String[] RAW = {
         "https://raw.githubusercontent.com/",
+        "https://ghproxy.net/https://raw.githubusercontent.com/",
+        "https://mirror.ghproxy.com/https://raw.githubusercontent.com/",
+        "https://github.moeyy.xyz/https://raw.githubusercontent.com/",
+        "https://raw.gitmirror.com/",
+        "https://ghfast.top/https://raw.githubusercontent.com/",
         "https://gh-proxy.org/https://raw.githubusercontent.com/",
         "https://gh-proxy.com/https://raw.githubusercontent.com/"
     };
