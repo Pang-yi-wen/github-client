@@ -805,6 +805,12 @@ async function applyUpdate() {
       return;
     } catch (_) {}
   }
+  if (window.Android) {
+    // 旧安装包没有 updatePage；WebView 里 <a download> 不会落盘，不能假装下载成功
+    toast('当前安装包不含页面更新接口，请先在设置里更新安装包', 6000);
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    return;
+  }
 
   try {
     const html = await fetchFirst(seg, t => {
