@@ -114,23 +114,78 @@ function parseIdent(line) {
 
 /* ---------------- 主流程 ---------------- */
 
-(async () => {
-  const localSha = git(['rev-parse', 'HEAD']).trim();
-  const rawCommit = git(['cat-file', 'commit', 'HEAD']);
+/**
+ * 待推送的提交列表（按时间从旧到新）。
+ * COMMITS：显式列出 SHA，逗号分隔
+ * FROM   ：起点（不含），自动展开 git rev-list --reverse FROM..HEAD
+ * 缺省   ：只推 HEAD
+ *
+ * 一次推多个提交时必须给全链路：Git Data API 创建 commit 时父对象必须已在远端，
+ * 否则 API 不会报错、而是静默建成 root 提交，远端 SHA 与本地不一致。
+ */
+function resolveCommits() {
+  if (process.env.COMMITS) {
+    return process.env.COMMITS.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (process.env.FROM) {
+    return git(['rev-list', '--reverse', process.env.FROM.trim() + '..HEAD'])
+      .split('\n').filter(Boolean);
+  }
+  return [git(['rev-parse', 'HEAD']).trim()];
+}
 
+/** 读取一个本地提交对象：头字段 + 原始 message */
+function readCommit(sha) {
+  const raw = git(['cat-file', 'commit', sha]);
   // 第一个空行之前是头，之后是 message（原样保留，含尾部换行）
-  const splitAt = rawCommit.indexOf('\n\n');
-  const header = rawCommit.slice(0, splitAt).split('\n');
-  const message = rawCommit.slice(splitAt + 2);
+  const splitAt = raw.indexOf('\n\n');
+  const header = raw.slice(0, splitAt).split('\n');
+  const message = raw.slice(splitAt + 2);
+  return {
+    sha,
+    tree: (header.find((l) => l.startsWith('tree ')) || '').split(' ')[1],
+    parents: header.filter((l) => l.startsWith('parent ')).map((l) => l.split(' ')[1]),
+    author: parseIdent(header.find((l) => l.startsWith('author '))),
+    committer: parseIdent(header.find((l) => l.startsWith('committer '))),
+    message
+  };
+}
 
-  const author = parseIdent(header.find((l) => l.startsWith('author ')));
-  const committer = parseIdent(header.find((l) => l.startsWith('committer ')));
-  const parentLine = header.find((l) => l.startsWith('parent '));
-  const localParent = parentLine ? parentLine.split(' ')[1] : null;
+/** 把一棵树的所有 blob 传到远端；返回建树用的 entries */
+async function pushTree(localSha) {
+  const lines = git(['ls-tree', '-r', localSha]).split('\n').filter(Boolean);
+  const entries = [];
+  for (const line of lines) {
+    const m = line.match(/^(\d+)\s+(\w+)\s+([0-9a-f]+)\t(.+)$/);
+    if (!m) throw new Error('ls-tree 输出异常：' + line);
+    const [, mode, type, blobSha, rel] = m;
+    if (type !== 'blob') continue; // 仓库里没有子模块
+    let remoteSha = null;
+    try {
+      // 已存在就不用重传；大仓库这一步能省掉大半请求
+      await api('GET', '/repos/' + REPO + '/git/blobs/' + blobSha);
+      remoteSha = blobSha;
+    } catch (_) {
+      // 必须按 blob SHA 取内容：读工作区文件在推历史提交时会拿到新版本，树会不对
+      const buf = execFileSync('git', ['cat-file', 'blob', blobSha],
+        { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+      const res = await api('POST', '/repos/' + REPO + '/git/blobs', {
+        content: buf.toString('base64'),
+        encoding: 'base64'
+      });
+      if (res.sha !== blobSha) console.warn('  ! blob 不一致 ' + rel);
+      remoteSha = res.sha;
+    }
+    entries.push({ path: rel, mode, type: 'blob', sha: remoteSha });
+  }
+  const tree = await api('POST', '/repos/' + REPO + '/git/trees', { tree: entries });
+  return { tree, count: entries.length };
+}
 
+(async () => {
+  const list = resolveCommits();
   console.log('repo      : ' + REPO + '  (' + BRANCH + ')');
-  console.log('local     : ' + localSha);
-  console.log('parent    : ' + (localParent || '(root)'));
+  console.log('commits   : ' + list.join(' '));
 
   // 0. 空仓库不收 git/blobs，先落一个占位文件把分支建起来
   let remoteHead = null;
@@ -145,66 +200,64 @@ function parseIdent(line) {
     console.log('seed      : 空仓库，已建立占位分支');
   }
 
-  // 父提交只在远端存在时才挂上，否则作为 root 提交重建
-  let parents = [];
-  if (localParent) {
-    try {
-      await api('GET', '/repos/' + REPO + '/git/commits/' + localParent);
-      parents = [localParent];
-    } catch (_) {
-      parents = [];
-    }
-  }
+  // 本地 SHA → 远端 SHA；本次推多个提交时要靠它把父提交串起来
+  const pushed = new Map();
+  let last = null;
 
-  // 1. blob
-  const lines = git(['ls-tree', '-r', 'HEAD']).split('\n').filter(Boolean);
-  const entries = [];
-  for (const line of lines) {
-    const m = line.match(/^(\d+)\s+\w+\s+([0-9a-f]+)\t(.+)$/);
-    if (!m) throw new Error('ls-tree 输出异常：' + line);
-    const [, mode, localBlob, rel] = m;
-    const buf = fs.readFileSync(path.join(ROOT, rel));
-    const res = await api('POST', '/repos/' + REPO + '/git/blobs', {
-      content: buf.toString('base64'),
-      encoding: 'base64'
+  for (const localSha of list) {
+    const c = readCommit(localSha);
+
+    const parents = [];
+    for (const p of c.parents) {
+      if (pushed.has(p)) { parents.push(pushed.get(p)); continue; }
+      try {
+        await api('GET', '/repos/' + REPO + '/git/commits/' + p);
+        parents.push(p);
+      } catch (_) {
+        if (process.env.ALLOW_ROOT === '1') {
+          console.warn('  ! 父提交不在远端，建成 root：' + p);
+          continue;
+        }
+        throw new Error('父提交不在远端：' + p + '。请把它一并列入 COMMITS（或设 FROM），' +
+          '否则 API 会静默建成 root 提交导致 SHA 漂移；确要 root 请设 ALLOW_ROOT=1。');
+      }
+    }
+
+    const { tree, count } = await pushTree(localSha);
+    const commit = await api('POST', '/repos/' + REPO + '/git/commits', {
+      message: c.message,
+      tree: tree.sha,
+      parents,
+      author: c.author,
+      committer: c.committer
     });
-    if (res.sha !== localBlob) {
-      console.warn('  ! blob 不一致 ' + rel);
-    }
-    entries.push({ path: rel, mode: mode, type: 'blob', sha: res.sha });
+
+    pushed.set(localSha, commit.sha);
+    last = commit.sha;
+    console.log([
+      '  local    ' + localSha.slice(0, 7),
+      'remote  ' + commit.sha.slice(0, 7),
+      'blobs   ' + count,
+      'tree    ' + (tree.sha === c.tree ? 'ok' : 'MISMATCH ' + tree.sha + ' != ' + c.tree),
+      'match   ' + (commit.sha === localSha ? 'YES' : 'NO')
+    ].join('  '));
   }
-  console.log('blobs     : ' + entries.length + ' 个');
 
-  // 2. tree
-  const tree = await api('POST', '/repos/' + REPO + '/git/trees', { tree: entries });
-
-  // 3. commit
-  const commit = await api('POST', '/repos/' + REPO + '/git/commits', {
-    message: message,
-    tree: tree.sha,
-    parents: parents,
-    author: author,
-    committer: committer
-  });
-  console.log('remote    : ' + commit.sha);
-  console.log('match     : ' + (commit.sha === localSha ? 'YES' : 'NO'));
-
-  // 4. 移动分支
+  // 移动分支
   if (remoteHead) {
-    await api('PATCH', '/repos/' + REPO + '/git/refs/heads/' + BRANCH, {
-      sha: commit.sha,
-      force: true
-    });
+    await api('PATCH', '/repos/' + REPO + '/git/refs/heads/' + BRANCH, { sha: last, force: true });
   } else {
-    await api('POST', '/repos/' + REPO + '/git/refs', {
-      ref: 'refs/heads/' + BRANCH,
-      sha: commit.sha
-    });
+    await api('POST', '/repos/' + REPO + '/git/refs', { ref: 'refs/heads/' + BRANCH, sha: last });
   }
 
-  git(['update-ref', 'refs/remotes/origin/' + BRANCH, commit.sha]);
+  // tracking ref 只能指向本地存在的对象；SHA 漂移时跳过
+  const localHas = (sha) => {
+    try { git(['cat-file', '-e', sha]); return true; } catch (_) { return false; }
+  };
+  if (localHas(last)) git(['update-ref', 'refs/remotes/origin/' + BRANCH, last]);
+  else console.warn('! 远端 SHA 与本地不一致，未更新 refs/remotes/origin/' + BRANCH);
 
-  console.log('\n推送完成。');
+  console.log('\n推送完成：' + list.length + ' 个提交 -> ' + last);
 })().catch((e) => {
   console.error('失败：' + e.message);
   process.exit(1);
