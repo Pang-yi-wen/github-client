@@ -421,6 +421,53 @@ code, pre, .mono {
   font-size: 11.5px; padding: 3px 8px;
 }
 
+/* ---------- 搜索历史 ---------- */
+
+.hist-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0 6px;
+  border-top: 1px solid var(--border-muted);
+  margin-top: 10px;
+  font-size: 12px; color: var(--fg-muted);
+}
+.hist-head .spacer { flex: 1; }
+
+.hist-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.hist-item:hover { background: var(--bg-subtle); }
+.hist-main { flex: 1; min-width: 0; }
+.hist-q {
+  font-size: 13px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hist-sum { font-size: 11.5px; color: var(--fg-muted); }
+.hist-act { flex: none; display: flex; gap: 4px; }
+/* 编辑态：条目原地换成输入框，历史面板里不需要跳转 */
+.hist-edit {
+  flex: 1; min-width: 0;
+  background: var(--bg-inset); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; font-size: 13px; font-family: inherit;
+}
+.hist-empty { font-size: 12px; color: var(--fg-subtle); padding: 4px 8px 8px; }
+
+/* 首页的最近搜索：一行 chip */
+.hist-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.hist-chip {
+  max-width: 100%;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12.5px; color: var(--fg-muted);
+  cursor: pointer; overflow: hidden;
+}
+.hist-chip:hover { color: var(--fg); border-color: var(--fg-subtle); }
+.hist-chip .hc-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .ch-row {
   display: flex;
   align-items: center;

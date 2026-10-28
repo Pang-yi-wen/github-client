@@ -432,6 +432,53 @@ code, pre, .mono {
   font-size: 11.5px; padding: 3px 8px;
 }
 
+/* ---------- 搜索历史 ---------- */
+
+.hist-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0 6px;
+  border-top: 1px solid var(--border-muted);
+  margin-top: 10px;
+  font-size: 12px; color: var(--fg-muted);
+}
+.hist-head .spacer { flex: 1; }
+
+.hist-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.hist-item:hover { background: var(--bg-subtle); }
+.hist-main { flex: 1; min-width: 0; }
+.hist-q {
+  font-size: 13px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hist-sum { font-size: 11.5px; color: var(--fg-muted); }
+.hist-act { flex: none; display: flex; gap: 4px; }
+/* 编辑态：条目原地换成输入框，历史面板里不需要跳转 */
+.hist-edit {
+  flex: 1; min-width: 0;
+  background: var(--bg-inset); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; font-size: 13px; font-family: inherit;
+}
+.hist-empty { font-size: 12px; color: var(--fg-subtle); padding: 4px 8px 8px; }
+
+/* 首页的最近搜索：一行 chip */
+.hist-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.hist-chip {
+  max-width: 100%;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12.5px; color: var(--fg-muted);
+  cursor: pointer; overflow: hidden;
+}
+.hist-chip:hover { color: var(--fg); border-color: var(--fg-subtle); }
+.hist-chip .hc-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .ch-row {
   display: flex;
   align-items: center;
@@ -4648,6 +4695,7 @@ function bindFileRows(scope) {
 
 async function viewHome() {
   document.title = 'GitHub 本地客户端';
+  const homeHist = histHomeHtml(6);
   app.innerHTML = `
     <div class="hero">
       <h1>一个更轻的 GitHub 入口。</h1>
@@ -4662,6 +4710,10 @@ async function viewHome() {
       <button class="btn" id="fromClip">从剪贴板打开</button>
     </div>
     <p class="hero-tip">点开上方搜索会展开整个面板：挑好类型与条件再一次提交，粘 github.com 链接则直接跳到对应页面。</p>
+    ${homeHist ? `<div class="panel" style="margin-bottom:14px">
+        <div class="panel-head">最近搜索</div>
+        <div class="hist-row" id="homeHist">${homeHist}</div>
+      </div>` : ''}
     <div class="grid-2">
       <div class="panel">
         <div class="panel-head">近期热门</div>
@@ -4691,6 +4743,17 @@ async function viewHome() {
         ${ICON.folder}<span class="fname-wrap"><span class="fname">${o} / ${r}</span></span>
         <span class="fmsg"></span></div>`).join('');
     bindFileRows($('#mine'));
+  }
+
+  // 首页的历史 chip 用委托：容器不变，内容会被 histRefreshAll 重绘
+  const hb = $('#homeHist');
+  if (hb) {
+    hb.addEventListener('click', (e) => {
+      const el = (e.target && e.target.closest) ? e.target.closest('[data-hist]') : null;
+      if (!el) return;
+      const it = histList().filter((x) => x.id === el.getAttribute('data-hist'))[0];
+      if (it) location.hash = histHash(it);
+    });
   }
 }
 
@@ -6577,6 +6640,8 @@ async function viewSearch(q, type, params) {
   const page = Math.max(1, Number(params.get('page') || 1));
 
   document.title = q + ' · 搜索';
+  // 记一条历史：翻页会重复进入这里，去重后等于把这条提到最前
+  histAdd({ q: q, type: type, f: f });
   loading();
 
   const query = composeSearchQuery(q, type, f);
@@ -7144,6 +7209,18 @@ async function openSettings(section) {
       </div>
 
       <div class="set-block">
+        <h4>搜索历史</h4>
+        <p class="hint" style="margin-bottom:8px">
+          每次检索记一条，含关键词、类型与筛选条件，存在本机。搜索面板里可重跑、改名或删除单条，首页显示最近几条。
+        </p>
+        <div class="modal-actions" style="margin-top:0">
+          <span class="dim" id="histInfo" style="font-size:12px"></span>
+          <span class="spacer"></span>
+          <button class="btn sm ghost" id="histClear">清空历史</button>
+        </div>
+      </div>
+
+      <div class="set-block">
         <h4>写操作</h4>
         <p class="hint">默认关闭，仅读取。开启后可在仓库页收藏、Fork 与上传文件，并在「我的」页新建仓库。
            写请求只发给直连或自建通道，不经过公共中转。</p>
@@ -7280,6 +7357,26 @@ async function openSettings(section) {
     refreshCacheInfo();
     toast(n ? '已清空 ' + n + ' 项缓存' : '缓存本来就是空的');
   });
+
+  const refreshHistInfo = () => {
+    const el = $('#histInfo');
+    if (el) {
+      const n = histList().length;
+      el.textContent = n ? '已记录 ' + n + ' 条（上限 ' + HIST_MAX + '）' : '暂无记录';
+    }
+  };
+  refreshHistInfo();
+
+  const histClearBtn = $('#histClear');
+  if (histClearBtn) {
+    histClearBtn.addEventListener('click', () => {
+      const n = histList().length;
+      histClear();
+      histRefreshAll();
+      refreshHistInfo();
+      toast(n ? '已清空 ' + n + ' 条搜索历史' : '本来就没有记录');
+    });
+  }
 
   const wrEn = $('#wrEn');
   if (wrEn) {
@@ -8528,6 +8625,200 @@ function emptyFilters() {
   };
 }
 
+/* ============================================================
+   搜索历史（仅本机 localStorage）
+   ------------------------------------------------------------
+   每次真正执行检索时记一条，含关键词、类型与筛选条件，因此
+   点历史条目能完整复原当时的检索式。粘贴的链接不记：那是跳转，不是检索。
+   ============================================================ */
+
+const HIST_KEY = 'ghl_hist';
+const HIST_MAX = 30;
+
+function histList() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((x) => x && typeof x.q === 'string' && x.q.trim());
+  } catch (_) {
+    return [];
+  }
+}
+
+function histSave(list) {
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, HIST_MAX))); } catch (_) {}
+}
+
+/** 关键词 + 类型 + 条件完全相同视为同一条 */
+function histKey(x) {
+  const f = x.f || {};
+  return [
+    String(x.q || '').trim(),
+    x.type || 'repositories',
+    Object.keys(f).sort().map((k) => k + '=' + f[k]).join('&')
+  ].join('|');
+}
+
+function histAdd(entry) {
+  const q = String((entry && entry.q) || '').trim();
+  if (!q || parseGithubUrl(q)) return;
+  const type = (entry && entry.type) || 'repositories';
+  const f = (entry && entry.f) || {};
+  const key = histKey({ q: q, type: type, f: f });
+  const list = histList().filter((x) => histKey(x) !== key);
+  list.unshift({
+    id: 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    q: q, type: type, f: f, t: Date.now()
+  });
+  histSave(list);
+}
+
+function histRemove(id) {
+  histSave(histList().filter((x) => x.id !== id));
+}
+
+function histClear() {
+  try { localStorage.removeItem(HIST_KEY); } catch (_) {}
+}
+
+function histUpdate(id, patch) {
+  const list = histList();
+  const i = list.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  list[i] = Object.assign({}, list[i], patch);
+  histSave(list);
+}
+
+/** 历史条目还原成搜索页的 hash */
+function histHash(it) {
+  const np = new URLSearchParams();
+  np.set('q', it.q);
+  np.set('type', it.type || 'repositories');
+  const f = it.f || {};
+  Object.keys(f).forEach((k) => { if (f[k]) np.set(k, f[k]); });
+  return '#/search?' + np.toString();
+}
+
+function histSummary(it) {
+  const f = it.f || {};
+  const pair = SEARCH_TYPES.filter((x) => x[0] === (it.type || 'repositories'))[0];
+  const bits = [pair ? pair[1] : '仓库'];
+  if (f.lang) bits.push('语言 ' + f.lang);
+  if (f.stars) bits.push('★>' + f.stars);
+  if (f.pushed) bits.push(f.pushed);
+  if (f.sort) bits.push('排序 ' + f.sort);
+  if (f.repo) bits.push('仓库 ' + f.repo);
+  if (f.path) bits.push('路径 ' + f.path);
+  if (f.state) bits.push(f.state === 'closed' ? '已关闭' : '打开');
+  if (f.label) bits.push('标签 ' + f.label);
+  return bits.join(' · ');
+}
+
+function histItemHtml(it, editable) {
+  return '<div class="hist-item" data-hist="' + esc(it.id) + '" title="' + esc(histSummary(it)) + '">' +
+    '<span class="hist-main"><span class="hist-q">' + esc(it.q) + '</span>' +
+    '<span class="hist-sum">' + esc(histSummary(it)) + '</span></span>' +
+    (editable
+      ? '<span class="hist-act">' +
+        '<button type="button" class="btn sm ghost" data-hedit="' + esc(it.id) + '">编辑</button>' +
+        '<button type="button" class="btn sm ghost" data-hdel="' + esc(it.id) + '">删除</button>' +
+        '</span>'
+      : '') +
+    '</div>';
+}
+
+function histPanelHtml() {
+  const list = histList();
+  if (!list.length) return '<div class="hist-head"><span>搜索历史</span></div>' +
+    '<div class="hist-empty">还没有记录。搜索过一次后，这里可以重跑、改名或删除。</div>';
+  return '<div class="hist-head"><span>搜索历史</span><span class="spacer"></span>' +
+    '<button type="button" class="btn sm ghost" data-hclear>清空</button></div>' +
+    list.map((it) => histItemHtml(it, true)).join('');
+}
+
+function histHomeHtml(n) {
+  return histList().slice(0, n || 6).map((it) =>
+    '<span class="hist-chip" data-hist="' + esc(it.id) + '" title="' + esc(histSummary(it)) + '">' +
+    '<span class="hc-q">' + esc(it.q) + '</span>' +
+    '<span class="dim">' + esc(histSummary(it).split(' · ')[0]) + '</span></span>').join('');
+}
+
+/** 当前搜索面板的「选中历史」回调；重绘后要重新绑事件 */
+let histPickHandler = null;
+
+function histRefreshAll() {
+  const box = $('#sp-hist');
+  if (box && histPickHandler) {
+    box.innerHTML = histPanelHtml();
+    bindHist(box, histPickHandler);
+  }
+  const hb = $('#homeHist');
+  if (hb) hb.innerHTML = histHomeHtml(6);
+}
+
+/** 单条原地编辑：改关键词，回车即用新词重跑 */
+function histEditInline(id, box, onPick) {
+  const row = box.querySelector('[data-hist="' + id + '"]');
+  if (!row) return;
+  const it = histList().filter((x) => x.id === id)[0];
+  if (!it) return;
+
+  row.innerHTML =
+    '<input class="hist-edit" type="text" value="' + esc(it.q) + '" spellcheck="false">' +
+    '<span class="hist-act">' +
+      '<button type="button" class="btn sm" data-hsave="' + esc(id) + '">搜索</button>' +
+      '<button type="button" class="btn sm ghost" data-hcancel="' + esc(id) + '">取消</button>' +
+    '</span>';
+  const inp = row.querySelector('input');
+  inp.focus();
+  inp.setSelectionRange(inp.value.length, inp.value.length);
+
+  const commit = () => {
+    const v = inp.value.trim();
+    if (!v) { toast('关键词不能为空'); return; }
+    histUpdate(id, { q: v, t: Date.now() });
+    onPick({ id: id, q: v, type: it.type, f: it.f });
+  };
+  row.querySelector('[data-hsave]').addEventListener('click', commit);
+  row.querySelector('[data-hcancel]').addEventListener('click', () => histRefreshAll());
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); histRefreshAll(); }
+  });
+}
+
+function bindHist(box, onPick) {
+  box.querySelectorAll('[data-hist]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const it = histList().filter((x) => x.id === el.getAttribute('data-hist'))[0];
+      if (it) onPick(it);
+    });
+  });
+  box.querySelectorAll('[data-hdel]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      histRemove(b.getAttribute('data-hdel'));
+      histRefreshAll();
+      toast('已删除该条历史');
+    });
+  });
+  box.querySelectorAll('[data-hedit]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      histEditInline(b.getAttribute('data-hedit'), box, onPick);
+    });
+  });
+  const cl = box.querySelector('[data-hclear]');
+  if (cl) {
+    cl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      histClear();
+      histRefreshAll();
+      toast('已清空搜索历史');
+    });
+  }
+}
+
 /**
  * 顶栏的搜索只是一个触发器，点开才铺满整个面板。
  * 条件在这里一次挑好，提交时拼成 URL 交给搜索结果页。
@@ -8555,6 +8846,7 @@ function openSearchPanel(opts) {
     mask.classList.remove('top');
     mask.innerHTML = '';
     mask.onclick = null;
+    histPickHandler = null;
     document.removeEventListener('keydown', onEsc);
   };
 
@@ -8622,6 +8914,7 @@ function openSearchPanel(opts) {
         '</div>' +
         '<div class="sp-filters">' + searchFilterBar(st.type, st.f, 'sp-') + '</div>' +
         '<div class="sp-preview" id="sp-preview"></div>' +
+        '<div class="sp-hist" id="sp-hist">' + histPanelHtml() + '</div>' +
         '<div class="sp-actions">' +
           '<span class="sp-hint">Enter 搜索　Esc 关闭</span>' +
           '<span class="spacer"></span>' +
@@ -8649,6 +8942,17 @@ function openSearchPanel(opts) {
     $('#sp-go').addEventListener('click', go);
     bindFilters();
     preview();
+
+    // 点历史条目：条件回填并直接执行
+    const pick = (it) => {
+      st.q = it.q;
+      st.type = it.type || 'repositories';
+      st.f = Object.assign(emptyFilters(), it.f || {});
+      close();
+      location.hash = histHash(it);
+    };
+    histPickHandler = pick;
+    bindHist($('#sp-hist'), pick);
   };
 
   mask.onclick = (e) => { if (e.target === mask) close(); };
