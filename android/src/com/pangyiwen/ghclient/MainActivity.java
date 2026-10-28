@@ -4,6 +4,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.DownloadManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -11,6 +15,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -78,6 +83,11 @@ public class MainActivity extends Activity {
     };
     /** 安装包版本清单在仓库里的路径 */
     private static final String APK_META_PATH = SELF + "/main/android/apk/version.json";
+    /** 通知渠道与 id；新提醒覆盖同一条，避免刷出一串通知 */
+    private static final String NOTIF_CHANNEL = "ghc_notify";
+    private static final int NOTIF_ID = 2001;
+    private static final String EXTRA_HASH = "openHash";
+    private static final int REQ_POST_NOTIF = 41;
 
     private WebView webView;
     private View zoomBar;
@@ -189,10 +199,19 @@ public class MainActivity extends Activity {
                     });
             }
         });
-        wv.loadUrl(boot != null ? "file://" + boot.getAbsolutePath() : "file:///android_asset/boot.html");
+        // 通知点击带 hash 进来时直接落到本地页面，boot.html 的 replace 会丢掉 hash
+        String openHash = getIntent() == null ? null : getIntent().getStringExtra(EXTRA_HASH);
+        if (openHash != null && boot != null) {
+            wv.loadUrl("file://" + pageFile().getAbsolutePath() + openHash);
+        } else {
+            wv.loadUrl(boot != null ? "file://" + boot.getAbsolutePath() : "file:///android_asset/boot.html");
+        }
         setContentView(wv);
         webView = wv;
         addZoomBar();
+
+        createNotifyChannel();
+        askNotifyPermission();
 
         IntentFilter f = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -831,6 +850,74 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(this, "更新失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }).start();
+    }
+
+    /* ------------------------- 通知提醒 ------------------------- */
+
+    /** Android 8+ 必须建渠道，否则通知不显示 */
+    private void createNotifyChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null || nm.getNotificationChannel(NOTIF_CHANNEL) != null) return;
+        NotificationChannel c = new NotificationChannel(NOTIF_CHANNEL, "GitHub 通知",
+            NotificationManager.IMPORTANCE_DEFAULT);
+        c.setDescription("评论区被回复、被 @、被指派时提醒");
+        nm.createNotificationChannel(c);
+    }
+
+    /** Android 13+ 需要运行时授权 POST_NOTIFICATIONS */
+    private void askNotifyPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+            == PackageManager.PERMISSION_GRANTED) return;
+        requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},
+            REQ_POST_NOTIF);
+    }
+
+    /**
+     * 页面发现新通知时调用。方法名不能是 notify —— Object.notify() 是 final，子类覆盖会编译失败。
+     */
+    @JavascriptInterface
+    public void pushNotification(String title, String text, String hash) {
+        if (title == null || title.isEmpty()) return;
+        runOnUiThread(() -> showNotification(title, text == null ? "" : text, hash));
+    }
+
+    private void showNotification(String title, String text, String hash) {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;   // 没授权就静默跳过，页面里的提示照常显示
+        }
+
+        Intent it = new Intent(this, MainActivity.class);
+        it.putExtra(EXTRA_HASH, hash == null ? "#/notifications" : hash);
+        it.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        PendingIntent pi = PendingIntent.getActivity(this, 0, it, flags);
+
+        // 系统自带图标：应用图标是自适应图标，直接用作状态栏小图标会显示成实心块
+        Notification.Builder b = new Notification.Builder(this, NOTIF_CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(new Notification.BigTextStyle().bigText(text))
+            .setContentIntent(pi)
+            .setAutoCancel(true);
+        nm.notify(NOTIF_ID, b.build());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String h = intent == null ? null : intent.getStringExtra(EXTRA_HASH);
+        if (h != null && webView != null) {
+            webView.loadUrl("file://" + pageFile().getAbsolutePath() + h);
+        }
     }
 
     private String fetchRemoteVersion() {

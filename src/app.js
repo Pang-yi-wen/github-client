@@ -214,6 +214,8 @@ function saveToken(t) {
   meCache = null;
   // 换了身份，旧缓存可能是另一批可见范围的内容
   clearCache();
+  // 通知属账号级数据，旧账号的已读基线对新账号不成立
+  try { notifForget(); } catch (_) {}
   try {
     if (TOKEN) localStorage.setItem('ghl_token', TOKEN);
     else localStorage.removeItem('ghl_token');
@@ -340,11 +342,11 @@ async function fetchVia(ch, path, opts) {
     'X-GitHub-Api-Version': '2022-11-28'
   };
   if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
-  if (opts.body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-    // 明文令牌只发给直连或自建通道
-    if (!ch.trust) throw new Error('写请求不允许经过公共中转');
+  // 明文令牌只发给直连或自建通道。判断放在 method 上：标记通知已读是 PATCH，不带 body
+  if (!ch.trust && method !== 'GET' && method !== 'HEAD') {
+    throw new Error('写请求不允许经过公共中转');
   }
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeout || 20000);
@@ -984,6 +986,389 @@ function openAssetDownloadDialog(name, size, url, kind) {
   });
 }
 
+/* ============================================================
+   通知提醒
+   ------------------------------------------------------------
+   被 @、被回复、被指派、订阅的议题有新动静时，GitHub 会写入一条通知。
+   这里按固定间隔拉取未读列表：出现新条目时提醒，列表页可就地标记已读。
+   通知接口需要令牌，且令牌要带 notifications 作用域，否则列表恒为空。
+   ============================================================ */
+
+const NOTIF_SEEN_KEY = 'ghl_notif_seen';   // 已提醒过的通知 id → 时间戳
+const NOTIF_BOOT_KEY = 'ghl_notif_boot';   // 首次拉取标记：已有未读不打扰
+const NOTIF_LAST_KEY = 'ghl_notif_last';
+const NOTIF_SEEN_MAX = 800;                // seen 上限，超出丢最旧的
+const NOTIF_SEEN_TTL = 7 * 86400000;       // 超过 7 天的 id 没有必要再记
+
+const notifState = {
+  items: [], unread: 0, timer: null, lastAt: 0, busy: false, err: '',
+  seen: notifLoadSeen()
+};
+
+const notifEnabled = () => LS.get('ghl_notify_on', '1') !== '0';
+const notifSysEnabled = () => LS.get('ghl_notify_sys', '1') !== '0';
+
+/** 轮询间隔，单位分钟，钳在 1–60 */
+function notifIntervalMs() {
+  const m = Number(LS.get('ghl_notify_min', '5'));
+  if (!m || isNaN(m) || m < 1) return 5 * 60 * 1000;
+  return Math.min(60, m) * 60 * 1000;
+}
+
+function notifLoadSeen() {
+  const m = new Map();
+  try {
+    const raw = JSON.parse(localStorage.getItem(NOTIF_SEEN_KEY) || '[]');
+    const cut = Date.now() - NOTIF_SEEN_TTL;
+    (Array.isArray(raw) ? raw : []).forEach((x) => {
+      if (Array.isArray(x) && x[0] && Number(x[1]) > cut) m.set(String(x[0]), Number(x[1]));
+    });
+  } catch (_) {}
+  return m;
+}
+
+function notifSaveSeen() {
+  const arr = Array.from(notifState.seen.entries())
+    .sort((a, b) => b[1] - a[1]).slice(0, NOTIF_SEEN_MAX);
+  try { localStorage.setItem(NOTIF_SEEN_KEY, JSON.stringify(arr)); } catch (_) {}
+}
+
+/** 换令牌时丢弃全部通知状态：可见范围变了，旧的基线不再成立 */
+function notifForget() {
+  notifState.items = [];
+  notifState.unread = 0;
+  notifState.err = '';
+  notifState.seen = new Map();
+  try {
+    localStorage.removeItem(NOTIF_SEEN_KEY);
+    localStorage.removeItem(NOTIF_BOOT_KEY);
+    localStorage.removeItem(NOTIF_LAST_KEY);
+  } catch (_) {}
+  notifRenderBell();
+}
+
+const NOTIF_REASON = {
+  assign: '指派给你',
+  author: '你创建的',
+  comment: '你参与的讨论有新回复',
+  ci_activity: '工作流有结果',
+  invitation: '邀请你加入',
+  manual: '手动订阅',
+  mention: '提到了你',
+  reply: '回复了你',
+  review_requested: '请求你评审',
+  security_alert: '安全提醒',
+  state_change: '状态变更',
+  subscribed: '已订阅',
+  team_mention: '提到了你的团队'
+};
+
+function notifReasonLabel(reason) {
+  return NOTIF_REASON[reason] || reason || '通知';
+}
+
+function notifItemTitle(it) {
+  const t = it && it.subject && it.subject.title;
+  return (t && String(t).trim()) || ((it && it.subject && it.subject.type) || '通知');
+}
+
+function notifIcon(type) {
+  if (type === 'PullRequest') return ICON.pr;
+  if (type === 'Issue') return ICON.issue;
+  if (type === 'Commit') return ICON.branch;
+  if (type === 'Release') return ICON.tag;
+  if (type === 'Discussion') return ICON.comment;
+  return ICON.issue;
+}
+
+/** 由通知的 API 地址推出站内路由；认不出就落回仓库首页 */
+function notifTarget(it) {
+  const sub = (it && it.subject) || {};
+  const repo = (it && it.repository) || {};
+  const full = repo.full_name || '';
+  const o = (repo.owner && repo.owner.login) || full.split('/')[0];
+  const r = repo.name || full.split('/')[1];
+  if (!o || !r) return null;
+  const api = String(sub.url || '');
+  let m = api.match(/\/repos\/[^/]+\/[^/]+\/(issues|pulls)\/(\d+)$/);
+  if (m) {
+    const isPR = sub.type === 'PullRequest' || m[1] === 'pulls';
+    return isPR ? link(o, r, 'pull', m[2]) : link(o, r, 'issue', m[2]);
+  }
+  m = api.match(/\/repos\/[^/]+\/[^/]+\/commits\/([0-9a-fA-F]+)$/);
+  if (m) return link(o, r, 'commit', m[1]);
+  if (/\/repos\/[^/]+\/[^/]+\/releases\//.test(api)) return link(o, r, 'releases');
+  return link(o, r);
+}
+
+function notifRenderBell() {
+  const b = $('#bell');
+  if (b) {
+    b.hidden = !TOKEN;
+    b.classList.toggle('has-unread', notifState.unread > 0);
+    b.title = !TOKEN ? '通知（需要令牌）'
+      : (notifState.unread ? notifState.unread + ' 条未读通知' : '没有未读通知');
+  }
+  const c = $('#bellCount');
+  if (c) {
+    c.hidden = notifState.unread === 0;
+    c.textContent = notifState.unread > 99 ? '99+' : String(notifState.unread);
+  }
+}
+
+/** 拉取未读列表。opts.silent 为真时不弹提醒（手动打开列表页用） */
+async function notifRefresh(opts) {
+  opts = opts || {};
+  if (!TOKEN) { notifRenderBell(); return null; }
+  if (notifState.busy) return notifState.items;
+  notifState.busy = true;
+  try {
+    const res = await gh('/notifications?per_page=50', { cache: false });
+    const list = Array.isArray(res) ? res : [];
+    const fresh = [];
+    list.forEach((it) => {
+      const id = String(it.id);
+      if (!notifState.seen.has(id)) {
+        notifState.seen.set(id, Date.now());
+        fresh.push(it);
+      }
+    });
+    notifSaveSeen();
+    LS.set(NOTIF_LAST_KEY, String(Date.now()));
+    notifState.items = list;
+    notifState.unread = list.length;
+    notifState.lastAt = Date.now();
+    notifState.err = '';
+    notifRenderBell();
+    // 首次拉取只记基线：否则几十条历史未读会一次性全弹出来
+    if (LS.get(NOTIF_BOOT_KEY, '') !== '1') LS.set(NOTIF_BOOT_KEY, '1');
+    else if (fresh.length && !opts.silent) notifAlert(fresh);
+    return list;
+  } catch (e) {
+    notifState.err = (e && e.message) || '请求失败';
+    return null;
+  } finally {
+    notifState.busy = false;
+  }
+}
+
+/** 新通知到达：页面内提示，客户端另发一条系统通知 */
+function notifAlert(fresh) {
+  const n = fresh.length;
+  const title = n === 1 ? notifItemTitle(fresh[0]) : n + ' 条新通知';
+  const body = n === 1
+    ? notifReasonLabel(fresh[0].reason) + ' · ' +
+      ((fresh[0].repository && fresh[0].repository.full_name) || '')
+    : fresh.slice(0, 3).map(notifItemTitle).join('、') + (n > 3 ? ' 等' : '');
+
+  toast(title + ' — ' + body, 6000);
+  if (!notifSysEnabled()) return;
+
+  try {
+    // 原生方法不叫 notify：Object.notify() 是 final，子类不能覆盖
+    if (window.Android && typeof window.Android.pushNotification === 'function') {
+      window.Android.pushNotification(title, body, '#/notifications');
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const nt = new Notification(title, { body: body, tag: 'ghc-notif' });
+      nt.onclick = () => { try { window.focus(); } catch (_) {} location.hash = '#/notifications'; };
+    }
+  } catch (_) {}
+}
+
+/** 标记单条已读。GitHub 的 thread id 与通知 id 是同一个值 */
+async function notifMarkRead(id) {
+  await ghWrite('PATCH', '/notifications/threads/' + encodeURIComponent(id), null, { clear: false });
+  notifState.items = notifState.items.filter((x) => String(x.id) !== String(id));
+  notifState.unread = notifState.items.length;
+  notifRenderBell();
+}
+
+/** 标记全部已读。空 body 表示把所有通知置为已读 */
+async function notifMarkAllRead() {
+  await ghWrite('PUT', '/notifications', {}, { clear: false });
+  notifState.items = [];
+  notifState.unread = 0;
+  notifRenderBell();
+}
+
+async function notifMarkRepoRead(fullName) {
+  await ghWrite('PUT', '/repos/' + fullName + '/notifications', {}, { clear: false });
+  notifState.items = notifState.items.filter(
+    (x) => ((x.repository && x.repository.full_name) || '') !== fullName
+  );
+  notifState.unread = notifState.items.length;
+  notifRenderBell();
+}
+
+/** 网页端桌面通知：必须由用户手势触发才能申请 */
+function notifRequestPermission() {
+  if (typeof Notification === 'undefined') return Promise.resolve('unsupported');
+  return Promise.resolve(Notification.requestPermission ? Notification.requestPermission() : 'denied');
+}
+
+/** 轮询：页面在后台时不请求，回到前台先补一次 */
+function notifSchedule() {
+  if (notifState.timer) { clearInterval(notifState.timer); notifState.timer = null; }
+  if (!TOKEN || !notifEnabled()) return;
+  notifState.timer = setInterval(() => {
+    if (document.hidden) return;
+    notifRefresh();
+  }, notifIntervalMs());
+}
+
+/** 令牌缺少 notifications 作用域时接口返回空列表，需要区分「无通知」和「读不到」 */
+async function notifScopeOk() {
+  const scopes = await getTokenScopes();
+  if (!scopes) return null;                       // fine-grained token，无法判断
+  return scopes.indexOf('notifications') >= 0 || scopes.indexOf('repo') >= 0;
+}
+
+function notifGrouped(items) {
+  const groups = [];
+  const byKey = new Map();
+  items.forEach((it) => {
+    const full = (it.repository && it.repository.full_name) || '其他';
+    let g = byKey.get(full);
+    if (!g) {
+      g = { full: full, name: (it.repository && it.repository.name) || full, items: [] };
+      byKey.set(full, g);
+      groups.push(g);
+    }
+    g.items.push(it);
+  });
+  return groups;
+}
+
+async function viewNotifications() {
+  document.title = '通知 · GitHub 本地客户端';
+
+  if (!TOKEN) {
+    app.innerHTML = `<div class="panel">
+      <div class="panel-head">通知</div>
+      <div class="empty-state">
+        <h3>需要访问令牌</h3>
+        <p class="hint">通知是账号级数据，只有带上令牌才能读取。令牌需包含 <code>notifications</code> 作用域。</p>
+        <div class="empty-actions">
+          <button class="btn primary" id="nfToken">去设置令牌</button>
+          <a class="btn" href="#/">回首页</a>
+        </div>
+      </div>
+    </div>`;
+    const b = $('#nfToken');
+    if (b) b.addEventListener('click', openSettings);
+    return;
+  }
+
+  loading();
+  const items = await notifRefresh({ silent: true });
+  const last = Number(LS.get(NOTIF_LAST_KEY, '0') || 0);
+  const status = notifState.err
+    ? '<span style="color:var(--red)">读取失败：' + esc(notifState.err) + '</span>'
+    : '上次检查 ' + (last ? new Date(last).toLocaleTimeString('zh-CN') : '—') +
+      ' · 每 ' + Math.round(notifIntervalMs() / 60000) + ' 分钟自动检查';
+
+  let scopeWarn = '';
+  if (items && !items.length) {
+    const ok = await notifScopeOk();
+    if (ok === false) {
+      scopeWarn = '<p class="hint" style="color:var(--yellow);margin:0 0 12px">' +
+        '当前令牌没有 <code>notifications</code> 作用域，接口会返回空列表。' +
+        '换一个带该作用域的令牌后才能收到提醒。</p>';
+    }
+  }
+
+  const groups = notifGrouped(items || []);
+  app.innerHTML = `
+    <div class="notif-head">
+      <h2>通知${notifState.unread ? '（' + notifState.unread + ' 条未读）' : ''}</h2>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn sm ghost" id="nfRefresh">刷新</button>
+      <button class="btn sm" id="nfAllRead" ${notifState.unread ? '' : 'disabled'}>全部标为已读</button>
+      <button class="btn sm ghost" id="nfSet">设置</button>
+    </div>
+    <div class="notif-sub">${status}</div>
+    ${scopeWarn}
+    ${groups.length ? groups.map((g) => `
+      <div class="notif-group">
+        <div class="notif-ghead">
+          <a href="${link(g.full.split('/')[0], g.full.split('/')[1])}">${esc(g.full)}</a>
+          <span class="spacer"></span>
+          <button class="btn sm ghost notif-mark" data-repo="${esc(g.full)}">该仓库标为已读</button>
+        </div>
+        ${g.items.map((it) => `
+          <div class="notif-item unread" data-id="${esc(it.id)}">
+            <span class="notif-dot"></span>
+            <span class="notif-body">
+              <div class="notif-title">${esc(notifItemTitle(it))}</div>
+              <div class="notif-meta">
+                ${notifIcon(it.subject && it.subject.type)}
+                <span>${esc((it.subject && it.subject.type) || '通知')}</span>
+                <span class="notif-reason">${esc(notifReasonLabel(it.reason))}</span>
+                <span>${esc(timeAgo(it.updated_at))}</span>
+              </div>
+            </span>
+            <button class="btn sm ghost notif-mark" data-mark="${esc(it.id)}">已读</button>
+          </div>`).join('')}
+      </div>`).join('')
+    : '<div class="empty">' + (notifState.err ? esc(notifState.err) : '没有未读通知') + '</div>'}`;
+
+  bindNotifPage();
+}
+
+function bindNotifPage() {
+  app.querySelectorAll('.notif-item').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target && e.target.closest && e.target.closest('[data-mark]')) return;
+      const id = el.getAttribute('data-id');
+      const it = notifState.items.find((x) => String(x.id) === String(id));
+      const hash = it ? notifTarget(it) : null;
+      if (hash) location.hash = hash;
+      notifMarkRead(id).then(() => {
+        const row = app.querySelector('.notif-item[data-id="' + id + '"]');
+        if (row) { row.classList.remove('unread'); row.querySelector('.notif-dot').classList.add('read'); }
+      }).catch((err) => toast('标记已读失败：' + err.message));
+    });
+  });
+
+  app.querySelectorAll('[data-mark]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = b.getAttribute('data-mark');
+      notifMarkRead(id).then(() => {
+        const row = app.querySelector('.notif-item[data-id="' + id + '"]');
+        if (row) row.remove();
+        toast('已标为已读');
+      }).catch((err) => toast('标记已读失败：' + err.message));
+    });
+  });
+
+  app.querySelectorAll('[data-repo]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const full = b.getAttribute('data-repo');
+      notifMarkRepoRead(full).then(() => { route(); toast(full + ' 的通知已全部标为已读'); })
+        .catch((err) => toast('标记已读失败：' + err.message));
+    });
+  });
+
+  const rf = $('#nfRefresh');
+  if (rf) rf.addEventListener('click', () => { notifRefresh({ silent: true }).then(() => route()); });
+
+  const ar = $('#nfAllRead');
+  if (ar) ar.addEventListener('click', () => {
+    if (!notifState.unread) return;
+    notifMarkAllRead().then(() => { route(); toast('已全部标为已读'); })
+      .catch((err) => toast('标记已读失败：' + err.message));
+  });
+
+  const st = $('#nfSet');
+  if (st) st.addEventListener('click', () => openSettings('notify'));
+}
+
 /* ---------------------------- Markdown ---------------------------- */
 
 const mdRenderer = new marked.Renderer();
@@ -1425,6 +1810,7 @@ async function viewHome() {
       <a class="btn" href="#/tools">通路与下载</a>
       <a class="btn" href="#/me">我的仓库</a>
       <a class="btn" href="#/search?q=stars:%3E10000&type=repositories">热门仓库</a>
+      <a class="btn" href="#/notifications">通知</a>
       <button class="btn" id="fromClip">从剪贴板打开</button>
     </div>
     <p class="hero-tip">点开上方搜索会展开整个面板：挑好类型与条件再一次提交，粘 github.com 链接则直接跳到对应页面。</p>
@@ -1493,7 +1879,7 @@ let guideOpen = false;
 const GUIDE = [
   {
     t: '设置访问令牌',
-    d: '令牌决定配额与权限。只读公开内容勾 public_repo；看私有仓库加 repo；改账号资料加 user。令牌只保存在本机，请求时直接发给 GitHub。',
+    d: '令牌决定配额与权限。只读公开内容勾 public_repo；看私有仓库加 repo；收通知提醒加 notifications；改账号资料加 user。令牌只保存在本机，请求时直接发给 GitHub。',
     btn: '去设置令牌',
     act: (close) => { close(); openSettings(); }
   },
@@ -1577,7 +1963,7 @@ function openAuthPrompt() {
       <p class="hint">未登录时每小时只能调用 60 次，浏览几个仓库就会用完；填入令牌后提升到 5000 次/小时。</p>
       <ul class="auth-points">
         <li>令牌只保存在本机，请求时直接发给 GitHub，不经过第三方。</li>
-        <li>只读公开内容勾 <code>public_repo</code>；看私有仓库加 <code>repo</code>；改账号资料加 <code>user</code>。</li>
+        <li>只读公开内容勾 <code>public_repo</code>；看私有仓库加 <code>repo</code>；收通知提醒加 <code>notifications</code>；改账号资料加 <code>user</code>。</li>
         <li>还没有账号可以先注册，注册页在客户端内打开。</li>
       </ul>
       <div class="modal-actions">
@@ -3820,7 +4206,8 @@ function acctEditForm(u) {
 
 /* ---------------------------- 设置面板 ---------------------------- */
 
-async function openSettings() {
+/** section 用于从别处跳进来时定位到具体一块，如 'notify' */
+async function openSettings(section) {
   if (!channelOrder.length) await ensureChannels();
   const mask = $('#modal');
   mask.hidden = false;
@@ -3850,6 +4237,7 @@ async function openSettings() {
         <div class="scope-pick">
           <label class="form-check"><input type="checkbox" id="scPriv" ${LS.get('ghl_sc_priv', '0') === '1' ? 'checked' : ''}> <span>读取私有仓库 <code>repo</code></span></label>
           <label class="form-check"><input type="checkbox" id="scUser" ${LS.get('ghl_sc_user', '0') === '1' ? 'checked' : ''}> <span>修改账号资料 <code>user</code></span></label>
+          <label class="form-check"><input type="checkbox" id="scNotif" ${LS.get('ghl_sc_notif', '1') === '0' ? '' : 'checked'}> <span>读取通知提醒 <code>notifications</code></span></label>
         </div>
         <div id="scopeHint" class="dim" style="font-size:11.5px;margin:-2px 0 8px"></div>
         <div class="tk-links">
@@ -3949,6 +4337,39 @@ async function openSettings() {
           <span class="spacer"></span>
           <button class="btn ghost sm" id="trlClear">恢复自动</button>
           <button class="btn primary sm" id="trlSave">保存</button>
+        </div>
+      </div>
+
+      <div class="set-block" id="set-notify">
+        <h4>通知提醒</h4>
+        <p class="hint" style="margin-bottom:10px">
+          被 @、被回复、被指派或订阅的议题有新动静时，GitHub 会写入一条通知。
+          开启后按下面的间隔检查未读列表，出现新条目时提醒：客户端弹系统通知，网页端弹浏览器通知（需先授权）。
+          顶栏铃铛显示未读数，点开可就地标记已读。令牌需要 <code>notifications</code> 作用域。
+        </p>
+        <label class="form-check" style="margin-bottom:10px">
+          <input type="checkbox" id="nfOn" ${notifEnabled() ? 'checked' : ''}>
+          <span>启用通知检查</span>
+        </label>
+        <label class="filt" style="margin-bottom:10px">
+          <span>检查间隔</span>
+          <select id="nfMin">
+            <option value="1">1 分钟</option>
+            <option value="3">3 分钟</option>
+            <option value="5">5 分钟</option>
+            <option value="10">10 分钟</option>
+            <option value="30">30 分钟</option>
+          </select>
+        </label>
+        <label class="form-check" style="margin-bottom:10px">
+          <input type="checkbox" id="nfSys" ${notifSysEnabled() ? 'checked' : ''}>
+          <span>新通知时弹出系统通知</span>
+        </label>
+        <div class="modal-actions" style="margin-top:0">
+          <span class="dim" id="nfStatus" style="font-size:11.5px"></span>
+          <span class="spacer"></span>
+          <button class="btn sm ghost" id="nfPerm">授权浏览器通知</button>
+          <button class="btn sm" id="nfNow">立即检查</button>
         </div>
       </div>
 
@@ -4059,6 +4480,70 @@ async function openSettings() {
     refreshTrStatus();
   });
 
+  /* ---------- 通知提醒 ---------- */
+
+  const refreshNfStatus = () => {
+    const el = $('#nfStatus');
+    if (!el) return;
+    const last = Number(LS.get(NOTIF_LAST_KEY, '0') || 0);
+    const bits = [];
+    if (!TOKEN) bits.push('未设置令牌');
+    else if (notifState.err) bits.push('上次失败：' + notifState.err);
+    else if (notifState.unread) bits.push(notifState.unread + ' 条未读');
+    else bits.push('无未读');
+    if (last) bits.push('上次检查 ' + new Date(last).toLocaleTimeString('zh-CN'));
+    el.textContent = bits.join(' · ');
+  };
+  refreshNfStatus();
+
+  const nfOn = $('#nfOn');
+  if (nfOn) {
+    nfOn.addEventListener('change', () => {
+      LS.set('ghl_notify_on', nfOn.checked ? '1' : '0');
+      notifSchedule();
+      toast(nfOn.checked ? '已开启通知检查' : '已关闭通知检查');
+    });
+  }
+
+  const nfMin = $('#nfMin');
+  if (nfMin) {
+    nfMin.value = String(Math.round(notifIntervalMs() / 60000));
+    nfMin.addEventListener('change', () => {
+      LS.set('ghl_notify_min', nfMin.value);
+      notifSchedule();
+      toast('检查间隔已设为 ' + nfMin.value + ' 分钟');
+    });
+  }
+
+  const nfSys = $('#nfSys');
+  if (nfSys) {
+    nfSys.addEventListener('change', () => {
+      LS.set('ghl_notify_sys', nfSys.checked ? '1' : '0');
+      if (nfSys.checked) notifRequestPermission();
+    });
+  }
+
+  const nfNow = $('#nfNow');
+  if (nfNow) {
+    nfNow.addEventListener('click', async () => {
+      nfNow.disabled = true;
+      await notifRefresh({ silent: true });
+      nfNow.disabled = false;
+      refreshNfStatus();
+      if (notifState.err) toast('读取通知失败：' + notifState.err);
+      else toast(notifState.unread ? notifState.unread + ' 条未读通知' : '没有未读通知');
+    });
+  }
+
+  const nfPerm = $('#nfPerm');
+  if (nfPerm) {
+    nfPerm.addEventListener('click', async () => {
+      const p = await notifRequestPermission();
+      toast(p === 'granted' ? '已授权浏览器通知'
+        : (p === 'unsupported' ? '当前环境不支持浏览器通知' : '浏览器通知未授权'));
+    });
+  }
+
   const updVer = $('#updVer');
   if (updVer) updVer.textContent = APP_VERSION;
 
@@ -4158,27 +4643,31 @@ async function openSettings() {
   $('#tkClear').addEventListener('click', () => {
     saveToken('');
     $('#tk').value = '';
+    notifSchedule();   // 无令牌时这里会停掉轮询
     toast('已清除令牌');
   });
 
   $('#tkCmd').addEventListener('click', () => copyText('gh auth token'));
 
-  // 作用域勾选：public_repo 为只读基础，repo 覆盖私有仓库，user 用于改资料
+  // 作用域勾选：public_repo 为只读基础，repo 覆盖私有仓库，user 用于改资料，
+  // notifications 用于读取通知提醒（缺了它 /notifications 会返回空列表）
   const scopeList = () => {
     const sc = [];
     if ($('#scUser') && $('#scUser').checked) sc.push('user');
     if ($('#scPriv') && $('#scPriv').checked) sc.push('repo');
     else sc.push('public_repo');
+    if ($('#scNotif') && $('#scNotif').checked) sc.push('notifications');
     return sc;
   };
   const updScope = () => {
     const el = $('#scopeHint');
     if (el) el.textContent = '将申请：' + scopeList().join('、');
   };
-  ['scPriv', 'scUser'].forEach(id => {
+  ['scPriv', 'scUser', 'scNotif'].forEach(id => {
     const e = $('#' + id);
     if (e) e.onchange = () => {
-      LS.set(id === 'scPriv' ? 'ghl_sc_priv' : 'ghl_sc_user', e.checked ? '1' : '0');
+      LS.set(id === 'scPriv' ? 'ghl_sc_priv' : (id === 'scUser' ? 'ghl_sc_user' : 'ghl_sc_notif'),
+        e.checked ? '1' : '0');
       updScope();
     };
   });
@@ -4204,6 +4693,8 @@ async function openSettings() {
       saveToken(v);
       $('#tkStatus').innerHTML = '已验证：<b>' + esc(u.login) + '</b>';
       toast('已保存，配额 ' + (rate.limit || 5000) + ' 次/小时');
+      // 换了令牌：重新建立通知基线并起轮询
+      notifRefresh({ silent: true }).then(() => notifSchedule());
     } catch (e) {
       TOKEN = old;
       meCache = null;
@@ -4262,6 +4753,17 @@ async function openSettings() {
     await initChannels();
     openSettings();
   });
+
+  // 从通知页等入口进来时，直接定位到对应那一块
+  if (section) {
+    const el = $('#set-' + section);
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: 'center' });
+      el.style.transition = 'background .4s';
+      el.style.background = 'color-mix(in srgb, var(--accent) 10%, transparent)';
+      setTimeout(() => { el.style.background = ''; }, 1400);
+    }
+  }
 }
 
 /* ---------------------------- 路由 ---------------------------- */
@@ -4293,6 +4795,8 @@ async function route() {
       case 'gists':
         document.querySelector('.topnav a[data-nav="gists"]').classList.add('on');
         return await viewGists();
+      case 'notifications':
+        return await viewNotifications();
       case 'g':
         document.querySelector('.topnav a[data-nav="gists"]').classList.add('on');
         return await viewGist(seg[1]);
@@ -4357,7 +4861,11 @@ async function route() {
 const writeEnabled = () => LS.get('ghl_write', '') === '1';
 const canWrite = () => writeEnabled() && !!TOKEN;
 
-async function ghWrite(method, path, body) {
+/**
+ * opts.clear === false 时不清缓存：标记通知已读不改变仓库内容，
+ * 清掉整个缓存会让刚看过的内容重新走一遍接口。
+ */
+async function ghWrite(method, path, body, opts) {
   if (!TOKEN) throw new Error('需要访问令牌');
   await ensureChannels();
 
@@ -4371,7 +4879,7 @@ async function ghWrite(method, path, body) {
   for (const ch of trusted) {
     try {
       const out = await fetchVia(ch, path, { method: method, body: body, timeout: 45000 });
-      clearCache();   // 内容已变，缓存不再可靠
+      if (!opts || opts.clear !== false) clearCache();   // 内容已变，缓存不再可靠
       if (retryDirect && ch === CH_DIRECT) {
         channelOrder = [CH_DIRECT].concat(channelOrder);
         activeChannel = CH_DIRECT;
@@ -5366,6 +5874,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#auth').addEventListener('click', openSettings);
   $('#ch').addEventListener('click', openSettings);
   $('#upd').addEventListener('click', applyUpdate);
+  $('#bell').addEventListener('click', () => { location.hash = '#/notifications'; });
   // 本地收藏按钮在多个页面复用，统一委托一次
   document.addEventListener('click', (e) => {
     const b = e.target && e.target.closest ? e.target.closest('[data-fav]') : null;
@@ -5383,4 +5892,15 @@ document.addEventListener('DOMContentLoaded', () => {
   maybeOnboard();
   checkUpdate();
   ensureChannels();
+
+  // 通知：启动时静默拉一次建立基线，之后按间隔轮询
+  if (TOKEN) {
+    notifRefresh({ silent: true }).then(() => notifSchedule());
+  }
+  document.addEventListener('visibilitychange', () => {
+    // 回到前台补一次，避免只在后台轮询导致提醒迟到
+    if (!document.hidden && TOKEN && notifEnabled() && Date.now() - notifState.lastAt > 30000) {
+      notifRefresh().then(() => notifSchedule());
+    }
+  });
 });
