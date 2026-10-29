@@ -4,6 +4,8 @@ GitHub 只读客户端。单个 HTML 文件，无需安装或构建，可直接�
 
 ![首页](docs/screenshots/home.png)
 
+> 截图取自早期版本，与当前界面存在差异，以实际页面为准。
+
 ## 特性
 
 **单文件**
@@ -15,6 +17,12 @@ GitHub 只读客户端。单个 HTML 文件，无需安装或构建，可直接�
 **多通路**
 不请求 github.com 的页面资源，仅调用 `api.github.com` 与 `codeload.github.com`。
 三条通路按探测延迟排序，主通路失败时依次切换。
+
+**无需代理**
+页面与接口走公开 CDN 与镜像通道，国内网络直连可用，不依赖 VPN / 代理工具，也不改动系统网络设置或 hosts。
+
+**下载速度**
+安装包与发行版资产提供六条通道：jsDelivr CDN、GitHub 发行版直链、ghfast.top、gh-proxy.org、ghproxy.net、raw 直连，在下载对话框里任选。移动网络下实测 jsDelivr 与 ghfast.top 约为 1–2 MB/s；同一文件在浏览器里直接下载时常见数十 KB/s。
 
 **请求开销**
 文件正文与 README 图片经 raw 通道获取，不计入 API 配额；缓存有效期内不重复请求。
@@ -268,6 +276,8 @@ Nginx 亦可替代：将 `/https://api.github.com/...` 转发至上游，并补�
 | 安装包更新 | `android/apk/version.json` 的 versionCode 升高 | 弹窗确认后下载安装包，完成后自动调起系统安装器 |
 
 安装包更新需要用户在系统设置中授予「安装未知应用」（Android 8.0+），首次更新时按提示引导开启。
+
+安装包同时发布在 GitHub Releases，资产名与 `android/apk/version.json` 的 `apk` 字段一致；下载对话框里的「GitHub 发行版」通道指向 `releases/latest/download/<apk>`，始终解析到最新一版。
 
 签名密钥位于 `android/ghclient.jks`（本地，不入库；已从构建目录迁出，清理 `build/` 不会使其重新生成），同一个包名覆盖安装必须使用同一密钥，遗失后无法原地升级，需单独备份。
 

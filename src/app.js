@@ -869,11 +869,14 @@ async function fetchApkMeta() {
 function apkDownloadChannels(apkName) {
   const { owner, repo, branch } = SELF_REPO;
   const raw = 'https://raw.githubusercontent.com/' + owner + '/' + repo + '/' + branch + '/android/apk/' + apkName;
+  // 发行版资产名与 version.json 的 apk 字段保持一致，latest 由 GitHub 重定向到最新 release
+  const rel = 'https://github.com/' + owner + '/' + repo + '/releases/latest/download/' + apkName;
   return [
     { label: 'jsDelivr CDN', url: 'https://cdn.jsdelivr.net/gh/' + owner + '/' + repo + '@' + branch + '/android/apk/' + apkName },
-    { label: 'ghproxy.net', url: 'https://ghproxy.net/' + raw },
-    { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + raw },
+    { label: 'GitHub 发行版', url: rel },
     { label: 'ghfast.top', url: 'https://ghfast.top/' + raw },
+    { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + raw },
+    { label: 'ghproxy.net', url: 'https://ghproxy.net/' + raw },
     { label: '直连 raw', url: raw }
   ];
 }
