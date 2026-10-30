@@ -1629,30 +1629,49 @@ function rewriteLinks(root, ctx) {
     const src = img.getAttribute('src');
     if (!src) return;
 
+    // 路径可能以编码形式出现（%20、%E4..）；encPath 会逐段再编码，必须先解一次
+    const dec = (s) => { try { return decodeURIComponent(s); } catch (_) { return s; } };
+
     // GitHub 的 raw/blob 链接
     const ghRaw = src.match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:raw|blob)\/([^/]+)\/(.+?)(?:\?raw=true)?$/);
     if (ghRaw) {
-      attachMediaChain(img, ghRaw[1], ghRaw[2], decodeURIComponent(ghRaw[3]), ghRaw[4]);
+      attachMediaChain(img, ghRaw[1], ghRaw[2], dec(ghRaw[3]), dec(ghRaw[4]));
       return;
     }
 
     const rawGh = src.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
     if (rawGh) {
-      attachMediaChain(img, rawGh[1], rawGh[2], decodeURIComponent(rawGh[3]), rawGh[4]);
+      attachMediaChain(img, rawGh[1], rawGh[2], dec(rawGh[3]), dec(rawGh[4]));
       return;
     }
 
     // 相对路径 → 仓库内文件
     if (isRelative(src)) {
-      const p = resolvePath(ctx.baseDir, src.split('?')[0].split('#')[0]);
+      const p = resolvePath(ctx.baseDir, dec(src.split('?')[0].split('#')[0]));
       img.setAttribute('loading', 'lazy');
       attachMediaChain(img, ctx.owner, ctx.repo, ctx.ref, p);
       return;
     }
 
-    // 绝对地址（avatars / user-images / camo / 外链）直接加载
+    // 其余绝对地址。GitHub 自家图床（user-images / private-user-images / camo）
+    // 与附件（github.com/user-attachments）在部分网络下直连不稳定：
+    // error 后逐个尝试公共中转前缀（实测仅 gh-proxy 系转发这些域，其余 403，但 error 降级无害）。
     img.setAttribute('loading', 'lazy');
-    img.addEventListener('error', () => { img.style.opacity = '.25'; }, { once: true });
+    if (/^https?:\/\/(?:[^/]*githubusercontent\.com|github\.com\/user-attachments)\//i.test(src)) {
+      const alts = ['https://gh-proxy.org/' + src, 'https://gh-proxy.com/' + src,
+        'https://ghfast.top/' + src, 'https://ghproxy.net/' + src];
+      let i = 0;
+      img.addEventListener('error', function onErr() {
+        if (i < alts.length) {
+          img.src = alts[i++];
+        } else {
+          img.removeEventListener('error', onErr);
+          img.style.opacity = '.25';
+        }
+      });
+    } else {
+      img.addEventListener('error', () => { img.style.opacity = '.25'; }, { once: true });
+    }
   });
 }
 
