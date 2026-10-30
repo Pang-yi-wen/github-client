@@ -1121,6 +1121,23 @@ mark {
 }
 .media-view video { max-width: 100%; max-height: 72vh; display: block; }
 .media-view.audio audio { width: 100%; max-width: 560px; }
+
+/* ---------- 本地收藏过滤 ---------- */
+
+.fav-search { padding: 8px 12px; border-bottom: 1px solid var(--border-muted); }
+.fav-search input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.fav-search input:focus { border-color: var(--accent); }
+.fav-search input::placeholder { color: var(--fg-subtle); }
 .img-meta {
   padding: 8px 14px;
   border-top: 1px solid var(--border-muted);
