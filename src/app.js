@@ -3834,10 +3834,10 @@ function highlightTerms(text, terms) {
   return s;
 }
 
-/** 搜索结果分页。GitHub 检索最多能翻到第 1000 条 */
+/** 搜索结果分页。GitHub 检索最多能翻到第 1000 条，每页取 100 条即最多 10 页 */
 function searchPager(params, page, total) {
-  const per = 30;
-  const maxPage = Math.min(34, Math.max(1, Math.ceil(Math.min(total, 1000) / per)));
+  const per = 100;
+  const maxPage = Math.min(10, Math.max(1, Math.ceil(Math.min(total, 1000) / per)));
   if (maxPage <= 1) return '';
 
   const mk = (p) => {
@@ -3884,12 +3884,47 @@ async function viewSearch(q, type, params) {
   loading();
 
   const query = composeSearchQuery(q, type, f);
-  const per = 30;
+  const per = 100;
   const qs = '?q=' + encodeURIComponent(query) + '&per_page=' + per + '&page=' + page;
   const sortQs = f.sort ? '&sort=' + encodeURIComponent(f.sort) + '&order=' + f.order : '';
 
   let body = '';
   let total = 0;
+
+  // 结果头：总数 + 超限说明（GitHub 检索硬性只返回前 1000 条）
+  const head = (unit) => '<div class="panel-head">' + fmtNum(total) + ' ' + unit +
+    (total > 1000 ? '<span class="dim cap-note">GitHub 限制：仅返回前 1000 条，可加筛选缩小范围</span>' : '') +
+    '</div>';
+
+  // 空结果的智能建议：按有无筛选与多词关键词给出可执行的重搜动作
+  const emptyHelp = () => {
+    if (total !== 0) return '';
+    const hasFilter = Object.keys(f).some((k) => k !== 'sort' && k !== 'order' && f[k]);
+    const acts = [];
+    if (hasFilter) {
+      const np = new URLSearchParams();
+      np.set('q', q);
+      np.set('type', type);
+      acts.push({ label: '清除筛选重搜', hash: '#/search?' + np.toString(), primary: true });
+    }
+    const words = q.trim().split(/\s+/).filter((t) => t.indexOf(':') < 0);
+    if (words.length > 1) {
+      const np = new URLSearchParams();
+      np.set('q', words[0]);
+      np.set('type', type);
+      acts.push({ label: '只搜“' + words[0] + '”', hash: '#/search?' + np.toString() });
+    }
+    if (!acts.length) {
+      return '<div class="empty search-empty"><div>没有结果。换个更短的关键词，或检查拼写；' +
+        '也可以在筛选栏减少条件。</div></div>';
+    }
+    return '<div class="empty search-empty"><div>没有结果：' +
+      (hasFilter ? '可能是筛选条件过严，或关键词与筛选不匹配。' : '试试下面的建议。') + '</div>' +
+      '<div class="se-acts">' + acts.map((a) =>
+        '<button type="button" class="btn sm ' + (a.primary ? '' : 'ghost') +
+        '" data-seact="' + esc(a.hash) + '">' + esc(a.label) + '</button>').join('') +
+      '</div></div>';
+  };
 
   try {
     if (type === 'code') {
@@ -3898,7 +3933,7 @@ async function viewSearch(q, type, params) {
         { accept: 'application/vnd.github.text-match+json' });
       total = res.total_count;
       const terms = searchTerms(q);
-      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个文件</div>' +
+      body = '<div class="panel">' + head('个文件') +
         (res.items.map((it) => {
           const parts = it.repository.full_name.split('/');
           const frag = (it.text_matches || [])[0];
@@ -3909,20 +3944,20 @@ async function viewSearch(q, type, params) {
             (frag ? '<pre class="ch-frag">' +
               highlightTerms(String(frag.fragment || '').slice(0, 400), terms) + '</pre>' : '') +
             '</div>';
-        }).join('') || '<div class="empty">没有结果</div>') + '</div>';
+        }).join('') || emptyHelp()) + '</div>';
     } else if (type === 'users') {
       const res = await gh('/search/users' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个用户</div>' +
+      body = '<div class="panel">' + head('个用户') +
         (res.items.map((u) => '<div class="file-row" data-href="#/u/' + encodeURIComponent(u.login) + '">' +
           avatar(u.avatar_url, 26) +
           '<span class="fname-wrap"><span class="fname">' + esc(u.login) + '</span></span>' +
           '<span class="fmsg">' + esc(u.type || '') + '</span></div>').join('') ||
-          '<div class="empty">没有结果</div>') + '</div>';
+          emptyHelp()) + '</div>';
     } else if (type === 'issues') {
       const res = await gh('/search/issues' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个议题</div>' +
+      body = '<div class="panel">' + head('个议题') +
         (res.items.map((it) => {
           const fo = it.repository_url.split('/').slice(-2);
           return '<div class="file-row" data-href="' +
@@ -3932,15 +3967,19 @@ async function viewSearch(q, type, params) {
             '<span class="fmsg">' + esc(fo[0] + '/' + fo[1]) + ' #' + it.number + '</span>' +
             '<span class="badge ' + (it.state === 'open' ? 'open' : 'closed') + '">' +
             esc(it.state === 'open' ? '打开' : '已关闭') + '</span></div>';
-        }).join('') || '<div class="empty">没有结果</div>') + '</div>';
+        }).join('') || emptyHelp()) + '</div>';
     } else {
       const res = await gh('/search/repositories' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel"><div class="panel-head">' + fmtNum(total) + ' 个仓库</div>' +
-        (res.items.map(repoCard).join('') || '<div class="empty">没有结果</div>') + '</div>';
+      body = '<div class="panel">' + head('个仓库') +
+        (res.items.map(repoCard).join('') || emptyHelp()) + '</div>';
     }
   } catch (e) {
-    body = errorBox('搜索失败', e.message);
+    const msg = String(e.message || '');
+    // 搜索接口单独限流：授权 30 次/分钟、匿名 10 次/分钟，比核心接口严得多
+    const tip = /403|rate limit/i.test(msg)
+      ? '（搜索接口限流：授权令牌 30 次/分钟、匿名 10 次/分钟，请稍后再试）' : '';
+    body = errorBox('搜索失败', msg + tip);
   }
 
   const tabs = [['repositories', '仓库'], ['code', '代码'], ['users', '用户'], ['issues', '议题']];
@@ -3960,6 +3999,9 @@ async function viewSearch(q, type, params) {
   bindFileRows();
   app.querySelectorAll('.code-hit').forEach((el) => {
     el.addEventListener('click', () => { location.hash = el.getAttribute('data-href'); });
+  });
+  app.querySelectorAll('[data-seact]').forEach((b) => {
+    b.addEventListener('click', () => { location.hash = b.getAttribute('data-seact'); });
   });
   bindSearchFilters();
 }
@@ -6124,9 +6166,11 @@ function openSearchPanel(opts) {
   mask.hidden = false;
   mask.classList.add('top');
 
+  let lastType = 'repositories';
+  try { lastType = localStorage.getItem('ghl_search_type') || 'repositories'; } catch (_) {}
   const st = {
     q: opts.q || '',
-    type: opts.type || 'repositories',
+    type: opts.type || lastType,
     f: opts.f || emptyFilters()
   };
 
@@ -6169,6 +6213,7 @@ function openSearchPanel(opts) {
     np.set('q', raw);
     np.set('type', st.type);
     Object.keys(st.f).forEach((k) => { if (st.f[k]) np.set(k, st.f[k]); });
+    try { localStorage.setItem('ghl_search_type', st.type); } catch (_) {}
     close();
     location.hash = '#/search?' + np.toString();
   };
@@ -6190,6 +6235,32 @@ function openSearchPanel(opts) {
     });
   };
 
+  // 输入联想：从本机历史里找包含当前关键词的条目，点击直接按原条件重跑
+  const suggest = () => {
+    const box = $('#sp-suggest');
+    if (!box) return;
+    const kw = st.q.trim().toLowerCase();
+    if (kw.length < 2) { box.innerHTML = ''; return; }
+    const list = histList().filter((it) => it.q.toLowerCase().indexOf(kw) !== -1).slice(0, 8);
+    if (!list.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="hist-head"><span>相关历史</span></div>' +
+      list.map((it) =>
+        '<span class="hist-chip" data-suggest="' + esc(it.id) + '" title="' + esc(histSummary(it)) + '">' +
+        '<span class="hc-q">' + esc(it.q) + '</span></span>').join('');
+    box.querySelectorAll('[data-suggest]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const it = histList().filter((x) => x.id === el.getAttribute('data-suggest'))[0];
+        if (!it) return;
+        st.q = it.q;
+        st.type = it.type || st.type;
+        st.f = Object.assign(emptyFilters(), it.f || {});
+        try { localStorage.setItem('ghl_search_type', st.type); } catch (_) {}
+        close();
+        location.hash = histHash(it);
+      });
+    });
+  };
+
   const draw = () => {
     mask.innerHTML =
       '<div class="search-panel">' +
@@ -6206,7 +6277,16 @@ function openSearchPanel(opts) {
             '" data-t="' + k + '">' + l + '</button>').join('') +
         '</div>' +
         '<div class="sp-filters">' + searchFilterBar(st.type, st.f, 'sp-') + '</div>' +
+        (st.type === 'repositories'
+          ? '<div class="sp-syntax">' +
+            [['stars:>1000', '★ > 1k'], ['stars:>100', '★ > 100'], ['in:name', '按名字匹配'],
+             ['in:readme', '含 README'], ['fork:false', '不含 fork'], ['archived:false', '排除归档']
+            ].map(([tok, label]) =>
+              '<button type="button" class="sp-chip" data-tok="' + esc(tok) + '">' + esc(label) + '</button>').join('') +
+            '<span class="dim sp-syntax-tip">点击追加到关键词</span></div>'
+          : '') +
         '<div class="sp-preview" id="sp-preview"></div>' +
+        '<div class="sp-suggest" id="sp-suggest"></div>' +
         '<div class="sp-hist" id="sp-hist">' + histPanelHtml() + '</div>' +
         '<div class="sp-actions">' +
           '<span class="sp-hint">Enter 搜索　Esc 关闭</span>' +
@@ -6220,7 +6300,7 @@ function openSearchPanel(opts) {
     const len = input.value.length;
     input.setSelectionRange(len, len);
 
-    input.addEventListener('input', () => { st.q = input.value; preview(); });
+    input.addEventListener('input', () => { st.q = input.value; preview(); suggest(); });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); go(); }
     });
@@ -6228,13 +6308,27 @@ function openSearchPanel(opts) {
     mask.querySelectorAll('.sp-type').forEach((b) => {
       b.addEventListener('click', () => {
         st.type = b.getAttribute('data-t');
+        try { localStorage.setItem('ghl_search_type', st.type); } catch (_) {}
         draw();
+      });
+    });
+
+    // 限定符快捷片：追加到关键词末尾，交给检索式预览确认
+    mask.querySelectorAll('.sp-chip').forEach((b) => {
+      b.addEventListener('click', () => {
+        const tok = b.getAttribute('data-tok');
+        if (!tok) return;
+        st.q = (st.q.trim() + ' ' + tok).trim();
+        input.value = st.q;
+        preview();
+        suggest();
       });
     });
 
     $('#sp-go').addEventListener('click', go);
     bindFilters();
     preview();
+    suggest();
 
     // 点历史条目：条件回填并直接执行
     const pick = (it) => {

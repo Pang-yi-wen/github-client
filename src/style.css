@@ -1138,6 +1138,25 @@ mark {
 }
 .fav-search input:focus { border-color: var(--accent); }
 .fav-search input::placeholder { color: var(--fg-subtle); }
+
+/* ---------- 搜索：语法快捷片、历史联想、超限与空结果说明 ---------- */
+
+.sp-syntax { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.sp-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sp-chip:hover { color: var(--fg); border-color: var(--accent); }
+.sp-syntax-tip { font-size: 11.5px; }
+.sp-suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-suggest .hist-head { width: 100%; }
+.cap-note { font-size: 11.5px; font-weight: 400; }
+.search-empty .se-acts { margin-top: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .img-meta {
   padding: 8px 14px;
   border-top: 1px solid var(--border-muted);
