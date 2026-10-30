@@ -2963,7 +2963,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.34';
+const APP_VERSION = '1.0.35';
 'use strict';
 
 /* ============================================================
@@ -5197,8 +5197,17 @@ async function bilibiliChat(system, user, ms) {
   return String(out).trim();
 }
 
+/** 术语与风格：LLM 通道（B 站 / Pollinations）共用的系统提示，保证全篇译法一致 */
+function trStyleSystem() {
+  const base = '你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。' +
+    '术语全篇一致：repository→仓库、issue→议题、pull request→拉取请求、commit→提交、fork→复刻、' +
+    'release→发行版、workflow→工作流、CLI→命令行；代码标识符、文件名、命令行示例与专有名词保留原文，不翻译。';
+  const pref = String(LS.get('ghl_tr_style', '') || '').trim();
+  return pref ? base + ' 用户额外要求：' + pref : base;
+}
+
 async function bilibiliTranslate(text) {
-  return bilibiliChat('你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。', text);
+  return bilibiliChat(trStyleSystem(), text);
 }
 
 /** 一次请求翻多条：编号输入、编号输出；解析失败逐条重试 */
@@ -5224,6 +5233,7 @@ async function bilibiliTranslateBatch(list) {
 /** Pollinations：免密钥的文本生成接口，用作翻译通道。慢，适合兜底 */
 async function pollinationsTranslate(text) {
   const q = 'Translate the following English text into Simplified Chinese. ' +
+    'Keep Markdown structure, keep code identifiers and proper nouns untranslated. ' +
     'Output only the translation, without explanation or quotes:\n\n' + text;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
@@ -5256,6 +5266,8 @@ async function myMemoryLong(s) {
 let lastTrErr = null;
 /** 通道失败后的冷却截止时间：避免每批都先去撞一条已经挂掉的通道 */
 const trDead = new Map();
+/** 本次翻译的统计：最终通道 / 段数 / 段缓存命中数 / 总耗时，完成后在提示里展示 */
+const trStats = { ch: '', segs: 0, cache: 0, ms: 0 };
 
 /** 通道顺序：选定的提到最前，其余仍作兜底 */
 const TR_MODES = {
@@ -5328,6 +5340,7 @@ async function translateBatch(items) {
         if (t !== null && t !== undefined && String(t).trim()) out[pending[k]] = t;
       });
       trDead.delete(ch);
+      trStats.ch = ch;   // 记录最后一条实际产出译文的通道
     } catch (e) {
       lastTrErr = e;
       trDead.set(ch, Date.now() + 120000);   // 失败后 2 分钟内不再优先尝试
@@ -5394,6 +5407,14 @@ function splitSentences(text, max) {
  * 因此短行合批；超长段落按句子切开单独翻译，避免被接口截断。
  */
 async function translateBlock(text, onTick) {
+  // 段级缓存：README 有改动时，未变的段落直接复用上次译文，不再发请求
+  const sk = segCacheKey(text);
+  const hit = trCacheGet(sk);
+  if (hit !== null) {
+    trStats.cache++;
+    return hit;
+  }
+
   const bt = await getBrowserTranslator();
   const maxChars = bt ? 1600 : 2400;
 
@@ -5403,6 +5424,7 @@ async function translateBlock(text, onTick) {
     if (skipLine(line)) return;
     const [prefix, body] = splitLinePrefix(line);
     if (!body.trim()) return;
+    if (mostlyChinese(body)) return;   // 已是中文的行不送翻译，省请求也防“译文”退化
     const g = protectInline(body);
     if (!g.text.trim()) return;
     jobs.push({ idx: i, prefix: prefix, guarded: g.text, map: g.map });
@@ -5466,7 +5488,9 @@ async function translateBlock(text, onTick) {
   });
 
   if (!ok) throw (lastTrErr || new Error('翻译接口未返回结果'));
-  return out.join('\n');
+  const outMd = out.join('\n');
+  trCacheSet(sk, outMd);
+  return outMd;
 }
 
 
@@ -5477,9 +5501,16 @@ async function translateBlock(text, onTick) {
 async function translateMarkdown(md, onTick, onPart) {
   const parts = splitMd(md);
   const idxs = [];
-  parts.forEach((p, i) => { if (!p.code) idxs.push(i); });
+  parts.forEach((p, i) => {
+    // 代码段与已是中文的段都不进翻译队列
+    if (!p.code && !mostlyChinese(p.text)) idxs.push(i);
+  });
   const total = idxs.length;
   if (!total) return md;
+
+  trStats.segs = total;
+  trStats.cache = 0;
+  const t0 = Date.now();
 
   const out = parts.map((p) => p.text);
   const bt = await getBrowserTranslator();
@@ -5506,6 +5537,7 @@ async function translateMarkdown(md, onTick, onPart) {
   };
 
   await Promise.all(Array.from({ length: limit }, worker));
+  trStats.ms = Date.now() - t0;
   if (!ok) throw (lastTrErr || new Error('翻译接口未返回结果'));
   return out.join('');
 }
@@ -5525,6 +5557,25 @@ function trCacheSet(key, val) {
     localStorage.setItem(TR_CACHE + key, JSON.stringify({ t: Date.now(), v: val }));
   } catch (_) {}
 }
+
+/** 段级缓存键：按段落文本哈希，README 有改动时未变段落可直接复用 */
+function segCacheKey(text) {
+  let h = 0;
+  const s = String(text);
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return 'seg:s' + (h >>> 0).toString(36) + '_' + s.length.toString(36);
+}
+
+/** 已是中文的行不送翻译：CJK 字符数与拉丁字母相当即视为中文 */
+function mostlyChinese(s) {
+  const cjk = (String(s).match(/[\u4e00-\u9fff]/g) || []).length;
+  if (!cjk) return false;
+  const latin = (String(s).match(/[A-Za-z]/g) || []).length;
+  return cjk >= Math.max(4, latin * 0.8);
+}
+
+/** 开启后：有整篇译文缓存的块在渲染时直接显示译文，不再点一次按钮 */
+const trAutoShow = () => LS.get('ghl_tr_auto', '0') === '1';
 
 /**
  * 给 markdown 块挂上翻译开关（README / issue / 评论 / Release）。
@@ -5546,6 +5597,13 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
   };
   label();
 
+  // 设置里开了「自动显示已有译文」：渲染时直接出译文，点按钮可切回原文
+  if (translated && trAutoShow()) {
+    showing = true;
+    paint(translated);
+    label();
+  }
+
   btn.addEventListener('click', async () => {
     if (showing) {
       showing = false;
@@ -5557,6 +5615,13 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       showing = true;
       paint(translated);
       label();
+      return;
+    }
+
+    // 整篇已是中文：不解释、不发请求
+    const cjk = (original.match(/[\u4e00-\u9fff]/g) || []).length;
+    if (cjk > 20 && cjk > ((original.match(/[A-Za-z]/g) || []).length * 0.5)) {
+      toast('内容主要是中文，无需翻译');
       return;
     }
 
@@ -5587,7 +5652,11 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       trCacheSet(cacheKey, out);
       showing = true;
       paint(out);
-      toast('已译为中文');
+      const cn = { tencent: '腾讯', bilibili: 'B 站', pollinations: 'Pollinations',
+        libre: 'LibreTranslate', mymemory: 'MyMemory', browser: '浏览器内置' }[trStats.ch] || '在线通道';
+      toast('已译为中文 · ' + cn + ' · ' + trStats.segs + ' 段' +
+        (trStats.cache ? ' · 缓存命中 ' + trStats.cache + ' 段' : '') +
+        ' · ' + (trStats.ms / 1000).toFixed(1) + 's', 5000);
     } catch (e) {
       toast('翻译失败：' + e.message + '。可在设置里填自建 LibreTranslate 地址', 6000);
     } finally {
@@ -7570,11 +7639,18 @@ async function openSettings(section) {
         </label>
 
         <div class="tr-custom">
+          <input id="trlStyle" type="text" placeholder="翻译偏好（可选），如：保留 API 名称英文"
+                 value="${esc(LS.get('ghl_tr_style', ''))}" spellcheck="false">
           <input id="trl" type="text" placeholder="LibreTranslate 地址，如 https://lt.example.com"
                  value="${esc(LS.get('ghl_translate', ''))}" spellcheck="false">
           <input id="trlKey" type="text" placeholder="API Key（该服务要求时填写）"
                  value="${esc(LS.get('ghl_translate_key', ''))}" spellcheck="false">
         </div>
+
+        <label class="form-check" style="margin:10px 0 0">
+          <input type="checkbox" id="trAuto" ${trAutoShow() ? 'checked' : ''}>
+          <span>打开页面时自动显示已缓存过的译文（不主动发起新翻译）</span>
+        </label>
 
         <div class="modal-actions" style="margin-top:10px">
           <span class="dim" id="trStatus" style="font-size:11.5px"></span>
@@ -7729,6 +7805,8 @@ async function openSettings(section) {
     LS.set('ghl_tr_mode', $('#trMode') ? $('#trMode').value : 'auto');
     LS.set('ghl_translate', $('#trl').value.trim());
     LS.set('ghl_translate_key', $('#trlKey').value.trim());
+    LS.set('ghl_tr_style', $('#trlStyle') ? $('#trlStyle').value.trim() : '');
+    LS.set('ghl_tr_auto', $('#trAuto') && $('#trAuto').checked ? '1' : '0');
     toast('翻译设置已保存');
     refreshTrStatus();
   });
@@ -7737,9 +7815,11 @@ async function openSettings(section) {
     LS.set('ghl_tr_mode', 'auto');
     LS.set('ghl_translate', '');
     LS.set('ghl_translate_key', '');
+    LS.set('ghl_tr_style', '');
     if ($('#trMode')) $('#trMode').value = 'auto';
     $('#trl').value = '';
     $('#trlKey').value = '';
+    $('#trlStyle').value = '';
     toast('已恢复自动');
     refreshTrStatus();
   });
