@@ -1108,6 +1108,19 @@ mark {
   background: repeating-conic-gradient(var(--bg-hover) 0% 25%, var(--bg-subtle) 0% 50%) 0 0 / 22px 22px;
 }
 .img-view img { max-width: 100%; max-height: 72vh; object-fit: contain; display: block; }
+
+/* ---------- 视频与音频预览 ---------- */
+
+.media-view {
+  padding: 18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--code-bg);
+  min-height: 140px;
+}
+.media-view video { max-width: 100%; max-height: 72vh; display: block; }
+.media-view.audio audio { width: 100%; max-width: 560px; }
 .img-meta {
   padding: 8px 14px;
   border-top: 1px solid var(--border-muted);

@@ -1119,6 +1119,19 @@ mark {
   background: repeating-conic-gradient(var(--bg-hover) 0% 25%, var(--bg-subtle) 0% 50%) 0 0 / 22px 22px;
 }
 .img-view img { max-width: 100%; max-height: 72vh; object-fit: contain; display: block; }
+
+/* ---------- 视频与音频预览 ---------- */
+
+.media-view {
+  padding: 18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--code-bg);
+  min-height: 140px;
+}
+.media-view video { max-width: 100%; max-height: 72vh; display: block; }
+.media-view.audio audio { width: 100%; max-width: 560px; }
 .img-meta {
   padding: 8px 14px;
   border-top: 1px solid var(--border-muted);
@@ -2914,7 +2927,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.29';
+const APP_VERSION = '1.0.30';
 'use strict';
 
 /* ============================================================
@@ -3511,11 +3524,11 @@ function rawMirrorList(o, r, ref, p) {
 }
 
 /**
- * 图片预览用的源列表：直连 raw 挪到最后。
- * 多数访问环境到 raw.githubusercontent.com 不通，img 逐源降级是串行的，
- * 把它放在最前会让每张图都先等一次超时。
+ * 媒体预览用的源列表：直连 raw 挪到最后。
+ * 多数访问环境到 raw.githubusercontent.com 不通，媒体标签逐源降级是串行的，
+ * 把它放在最前会让每个文件都先等一次超时。
  */
-function imgPreviewSources(o, r, ref, p) {
+function mediaPreviewSources(o, r, ref, p) {
   const list = rawMirrorList(o, r, ref, p);
   const direct = list.filter((u) => u.indexOf(RAW_HOST) === 0);
   return list.filter((u) => u.indexOf(RAW_HOST) !== 0).concat(direct);
@@ -4461,18 +4474,24 @@ function parseGithubUrl(raw) {
 
 /* ---------- 图片：多个 raw 源逐级降级，最后回落 API 二进制 ---------- */
 
-/** 依次尝试所有 raw 源，全部失败再把图片经 API 取回本地 Blob */
-function attachImgChain(img, o, r, ref, p, sources) {
+/** 依次尝试所有 raw 源，全部失败后按需经 API 取回本地 Blob。
+ *  适用于 img / video / audio：媒体标签加载不受跨域限制，镜像可用面远大于 fetch。 */
+function attachMediaChain(el, o, r, ref, p, sources, apiFallback) {
   const list = sources || rawSources(o, r, ref, p);
   let i = 0;
-  img.src = list[0];
-  img.addEventListener('error', function onErr() {
+  el.src = list[0];
+  el.addEventListener('error', function onErr() {
     i++;
     if (i < list.length) {
-      img.src = list[i];
+      el.src = list[i];
     } else {
-      img.removeEventListener('error', onErr);
-      loadImageViaApi(img, o, r, ref, p);
+      el.removeEventListener('error', onErr);
+      if (apiFallback === false) {
+        // 视频 / 音频不回退 API：contents raw 会把整个文件读进内存
+        el.dispatchEvent(new CustomEvent('mediachain-fail', { bubbles: true }));
+      } else {
+        loadImageViaApi(el, o, r, ref, p);
+      }
     }
   });
 }
@@ -4491,7 +4510,7 @@ async function loadImageViaApi(img, o, r, ref, p) {
   } catch (_) {
     img.style.opacity = '.2';
     // 文件页等调用方据此把预览区换成失败说明
-    img.dispatchEvent(new CustomEvent('imgchain-fail', { bubbles: true }));
+    img.dispatchEvent(new CustomEvent('mediachain-fail', { bubbles: true }));
   }
 }
 
@@ -4543,13 +4562,13 @@ function rewriteLinks(root, ctx) {
     // GitHub 的 raw/blob 链接
     const ghRaw = src.match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:raw|blob)\/([^/]+)\/(.+?)(?:\?raw=true)?$/);
     if (ghRaw) {
-      attachImgChain(img, ghRaw[1], ghRaw[2], decodeURIComponent(ghRaw[3]), ghRaw[4]);
+      attachMediaChain(img, ghRaw[1], ghRaw[2], decodeURIComponent(ghRaw[3]), ghRaw[4]);
       return;
     }
 
     const rawGh = src.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
     if (rawGh) {
-      attachImgChain(img, rawGh[1], rawGh[2], decodeURIComponent(rawGh[3]), rawGh[4]);
+      attachMediaChain(img, rawGh[1], rawGh[2], decodeURIComponent(rawGh[3]), rawGh[4]);
       return;
     }
 
@@ -4557,7 +4576,7 @@ function rewriteLinks(root, ctx) {
     if (isRelative(src)) {
       const p = resolvePath(ctx.baseDir, src.split('?')[0].split('#')[0]);
       img.setAttribute('loading', 'lazy');
-      attachImgChain(img, ctx.owner, ctx.repo, ctx.ref, p);
+      attachMediaChain(img, ctx.owner, ctx.repo, ctx.ref, p);
       return;
     }
 
@@ -5775,7 +5794,14 @@ const IMG_MIME = {
   webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
   svg: 'image/svg+xml'
 };
-/** 超过该大小不做内嵌预览：大图解码占内存，只提供下载 */
+/** 浏览器大概率可解码的媒体容器；mkv / mov 视环境而定，放不了会走降级说明 */
+const AV_MIME = {
+  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
+  mov: 'video/quicktime', mkv: 'video/x-matroska',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg',
+  m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac', opus: 'audio/opus'
+};
+/** 超过该大小不读取 SVG 源文本：源码视图有内存代价，预览本身不受限 */
 const IMG_PREVIEW_MAX = 25 * 1024 * 1024;
 
 /** 本轮页面用到的 objectURL；route 换页时统一释放，避免 Blob 泄漏 */
@@ -5813,11 +5839,14 @@ async function viewBlob(o, r, ref, path) {
   let size = null;
   let isBinary = false;
   const imgMime = IMG_MIME[ext] || '';
-  const imgMode = !!imgMime;           // 图片文件：预览走 <img> 多源，不走 fetch
+  const avMime = AV_MIME[ext] || '';
+  const mediaKind = imgMime ? 'img'
+    : (avMime ? (avMime.indexOf('video/') === 0 ? 'video' : 'audio') : '');
+  const mediaMode = !!mediaKind;       // 图片 / 视频 / 音频：预览走媒体标签多源，不走 fetch
 
-  if (imgMode) {
-    // 图片不用 fetch 读字节：实测 ghproxy.net / ghfast.top / 直连 raw 均不带跨域响应头，
-    // jsDelivr 会 301 回 raw，fetch 在浏览器里全部被拦；<img> 不受此限制，
+  if (mediaMode) {
+    // 媒体不用 fetch 读字节：实测 ghproxy.net / ghfast.top / 直连 raw 均不带跨域响应头，
+    // jsDelivr 会 301 回 raw，fetch 在浏览器里全部被拦；媒体标签不受此限制，
     // 改走与 README 图片相同的多源降级链
     if (imgMime === 'image/svg+xml') {
       // SVG 顺带取文本供「源码」视图；通路不带跨域头时取不到，只影响该按钮
@@ -5861,9 +5890,15 @@ async function viewBlob(o, r, ref, path) {
   if (text !== null && text.indexOf('\u0000') !== -1) { text = null; isBinary = true; }
 
   let body;
-  if (imgMode) {
-    body = '<div class="img-view"><img id="imgPrev" alt="' + esc(name) + '"></div>' +
-      '<div class="img-meta" id="imgMeta">' + esc(name) + '</div>';
+  if (mediaMode) {
+    const tag = mediaKind === 'video'
+      ? '<video id="mediaPrev" controls playsinline preload="metadata"></video>'
+      : mediaKind === 'audio'
+        ? '<audio id="mediaPrev" controls preload="metadata"></audio>'
+        : '<img id="mediaPrev" alt="' + esc(name) + '">';
+    const cls = mediaKind === 'img' ? 'img-view' : 'media-view' + (mediaKind === 'audio' ? ' audio' : '');
+    body = '<div class="' + cls + '">' + tag + '</div>' +
+      '<div class="img-meta" id="mediaMeta">' + esc(name) + '</div>';
   } else if (text !== null) {
     let highlighted;
     if (text.length > MAX_HL) {
@@ -5894,8 +5929,8 @@ async function viewBlob(o, r, ref, path) {
         <span class="path-crumb">${crumbHtml}</span>
         <span class="spacer"></span>
         <span class="mono dim">${size !== null ? fmtSize(size) : ''}</span>
-        ${isMd && text !== null && !imgMode ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
-        ${isSvg && imgMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
+        ${isMd && text !== null && !mediaMode ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
+        ${isSvg && mediaMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
         <button class="btn sm" id="dlFile">${ICON.download} 下载</button>
       </div>
       <div id="fileBody">${body}</div>
@@ -5903,19 +5938,33 @@ async function viewBlob(o, r, ref, path) {
 
   $('#dlFile').addEventListener('click', () => downloadOne(o, r, ref, path, name));
 
-  if (imgMode) {
+  if (mediaMode) {
     const box = $('#fileBody');
     box.dataset.preview = '1';
-    const im = $('#imgPrev');
-    // 与 README 图片同一条多源降级链；全部失败时给出明确说明而不是灰图
-    attachImgChain(im, o, r, ref, path, imgPreviewSources(o, r, ref, path));
-    im.addEventListener('load', () => {
-      const m = $('#imgMeta');
-      if (m) m.textContent = name + ' · ' + im.naturalWidth + ' × ' + im.naturalHeight;
-    });
-    im.addEventListener('imgchain-fail', () => {
-      box.innerHTML = '<div class="binary-note">图片预览失败：文件可能为 Git LFS 指针、已被删除，' +
-        '或所有镜像暂不可用。<br><br>可点击顶栏「下载」获取原文件。</div>';
+    const el = $('#mediaPrev');
+    // 与 README 图片同一条多源降级链；视频 / 音频不回退 API（避免整文件读入内存），
+    // 全部失败时给出明确说明而不是空控件
+    attachMediaChain(el, o, r, ref, path, mediaPreviewSources(o, r, ref, path), mediaKind === 'img');
+    if (mediaKind === 'img') {
+      el.addEventListener('load', () => {
+        const m = $('#mediaMeta');
+        if (m) m.textContent = name + ' · ' + el.naturalWidth + ' × ' + el.naturalHeight;
+      });
+    } else {
+      el.addEventListener('loadedmetadata', () => {
+        const m = $('#mediaMeta');
+        if (!m || !isFinite(el.duration)) return;
+        const s = Math.round(el.duration);
+        const dur = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+        m.textContent = (mediaKind === 'video' && el.videoWidth
+          ? name + ' · ' + el.videoWidth + ' × ' + el.videoHeight
+          : name) + ' · ' + dur;
+      });
+    }
+    el.addEventListener('mediachain-fail', () => {
+      const what = mediaKind === 'img' ? '图片' : (mediaKind === 'video' ? '视频' : '音频');
+      box.innerHTML = '<div class="binary-note">' + what + '预览失败：可能为 Git LFS 指针、' +
+        '浏览器不支持该格式，或所有镜像暂不可用。<br><br>可点击顶栏「下载」获取原文件。</div>';
       box.dataset.preview = '0';
     });
     if (isSvg && text !== null) {
