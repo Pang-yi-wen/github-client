@@ -2833,6 +2833,23 @@ const LANG_MAP = {
 
 const MAX_HL = 512 * 1024;
 
+/* ---------- 图片文件预览 ---------- */
+
+const IMG_MIME = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+  svg: 'image/svg+xml'
+};
+/** 超过该大小不做内嵌预览：大图解码占内存，只提供下载 */
+const IMG_PREVIEW_MAX = 25 * 1024 * 1024;
+
+/** 本轮页面用到的 objectURL；route 换页时统一释放，避免 Blob 泄漏 */
+const liveObjectUrls = [];
+function trackObjectUrl(url) { liveObjectUrls.push(url); }
+function revokeObjectUrls() {
+  while (liveObjectUrls.length) URL.revokeObjectURL(liveObjectUrls.pop());
+}
+
 async function viewBlob(o, r, ref, path) {
   loading();
 
@@ -2860,12 +2877,20 @@ async function viewBlob(o, r, ref, path) {
   let text = null;
   let size = null;
   let isBinary = false;
+  let imgBytes = null;                 // 图片文件的原始字节，用于内嵌预览
+  const imgMime = IMG_MIME[ext] || '';
 
   // 一、raw 通道：不消耗 API 额度，多数情况下一次成功
   try {
     const buf = await fetchRawBytes(o, r, ref, path);
     size = buf.length;
-    if (looksBinary(buf)) isBinary = true;
+    // LFS 指针是几行纯文本，raw 返回的不是图片本体，按普通文件处理
+    if (imgMime && size <= IMG_PREVIEW_MAX &&
+        !/^version https:\/\/git-lfs/.test(bytesToText(buf.slice(0, 64)))) {
+      imgBytes = buf;
+      // SVG 是文本格式，保留原文供「源码」视图
+      if (imgMime === 'image/svg+xml') text = bytesToText(buf);
+    } else if (looksBinary(buf)) isBinary = true;
     else text = bytesToText(buf);
   } catch (_) {
     // 二、回退 contents API（目录、私有仓库、raw 全不可用时走这里）
@@ -2874,15 +2899,29 @@ async function viewBlob(o, r, ref, path) {
         '?ref=' + encodeURIComponent(ref));
       if (Array.isArray(file)) { location.hash = link(o, r, 'tree', ref, path); return; }
       size = file.size;
-      if (file.encoding === 'base64' && file.content) {
-        text = b64ToText(file.content);
-      } else if (file.sha && file.size <= 2097152) {
+      if (imgMime && file.size <= IMG_PREVIEW_MAX) {
+        // 图片按二进制原样取回，不经过文本解码
         try {
-          text = await gh('/repos/' + o + '/' + r + '/git/blobs/' + file.sha,
-            { accept: 'application/vnd.github.raw' });
+          const bl = await gh('/repos/' + o + '/' + r + '/contents/' + encPath(path) +
+            '?ref=' + encodeURIComponent(ref),
+            { accept: 'application/vnd.github.raw', blob: true });
+          const ab = await bl.arrayBuffer();
+          if (!/^version https:\/\/git-lfs/.test(bytesToText(new Uint8Array(ab.slice(0, 64))))) {
+            imgBytes = new Uint8Array(ab);
+          }
         } catch (_) {}
       }
-      if (text === null) isBinary = true;
+      if (!imgBytes) {
+        if (file.encoding === 'base64' && file.content) {
+          text = b64ToText(file.content);
+        } else if (file.sha && file.size <= 2097152) {
+          try {
+            text = await gh('/repos/' + o + '/' + r + '/git/blobs/' + file.sha,
+              { accept: 'application/vnd.github.raw' });
+          } catch (_) {}
+        }
+        if (text === null) isBinary = true;
+      }
     } catch (e) {
       app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取文件', e.message);
       return;
@@ -2893,7 +2932,13 @@ async function viewBlob(o, r, ref, path) {
   if (text !== null && text.indexOf('\u0000') !== -1) { text = null; isBinary = true; }
 
   let body;
-  if (text !== null) {
+  if (imgBytes) {
+    const url = URL.createObjectURL(new Blob([imgBytes], { type: imgMime }));
+    trackObjectUrl(url);
+    body = '<div class="img-view"><img id="imgPrev" alt="' + esc(name) + '"></div>' +
+      '<div class="img-meta" id="imgMeta">' + esc(name) +
+      (size !== null ? ' · ' + fmtSize(size) : '') + '</div>';
+  } else if (text !== null) {
     let highlighted;
     if (text.length > MAX_HL) {
       highlighted = esc(text);
@@ -2914,6 +2959,7 @@ async function viewBlob(o, r, ref, path) {
   }
 
   const isMd = /\.(md|markdown|mdx)$/i.test(name);
+  const isSvg = imgMime === 'image/svg+xml';
 
   app.innerHTML = (repo ? repoHeader(repo, 'code') : repoHeaderLite(o, r)) + `
     <div class="panel">
@@ -2923,12 +2969,47 @@ async function viewBlob(o, r, ref, path) {
         <span class="spacer"></span>
         <span class="mono dim">${size !== null ? fmtSize(size) : ''}</span>
         ${isMd && text !== null ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
+        ${isSvg && imgBytes && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
         <button class="btn sm" id="dlFile">${ICON.download} 下载</button>
       </div>
       <div id="fileBody">${body}</div>
     </div>`;
 
   $('#dlFile').addEventListener('click', () => downloadOne(o, r, ref, path, name));
+
+  if (imgBytes) {
+    const box = $('#fileBody');
+    box.dataset.preview = '1';
+    // 图片解码完成后补上原始尺寸
+    const im = $('#imgPrev');
+    if (im) im.addEventListener('load', () => {
+      const m = $('#imgMeta');
+      if (m) m.textContent = name + ' · ' + im.naturalWidth + ' × ' + im.naturalHeight +
+        (size !== null ? ' · ' + fmtSize(size) : '');
+    });
+    if (isSvg && text !== null) {
+      $('#svgToggle').addEventListener('click', (ev) => {
+        if (box.dataset.preview === '1') {
+          let hl;
+          if (text.length > MAX_HL) hl = esc(text);
+          else {
+            try { hl = hljs.highlight(text, { language: 'xml', ignoreIllegals: true }).value; }
+            catch (_) { hl = esc(text); }
+          }
+          const lines = text.split('\n').length;
+          box.innerHTML = '<div class="code-view"><div class="gutter">' +
+            Array.from({ length: lines }, (_, i) => i + 1).join('\n') +
+            '</div><pre><code class="hljs">' + hl + '</code></pre></div>';
+          box.dataset.preview = '0';
+          ev.target.textContent = '图片';
+        } else {
+          box.innerHTML = body;
+          box.dataset.preview = '1';
+          ev.target.textContent = '源码';
+        }
+      });
+    }
+  }
 
   if (isMd && text !== null) {
     $('#mdToggle').addEventListener('click', (ev) => {
@@ -4835,6 +4916,7 @@ async function route() {
   document.querySelectorAll('.topnav a').forEach(a => a.classList.remove('on'));
   window.scrollTo(0, 0);
   updateAuthBadge();
+  revokeObjectUrls();
 
   try {
     if (!seg.length) return await viewHome();

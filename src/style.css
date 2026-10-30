@@ -1096,6 +1096,28 @@ mark {
 
 .binary-note { padding: 50px 20px; text-align: center; color: var(--fg-muted); background: var(--code-bg); font-size: 13px; }
 
+/* ---------- 图片预览 ---------- */
+
+/* 棋盘格背景标示透明区域；两主题都取自现有 token */
+.img-view {
+  padding: 18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 220px;
+  background: repeating-conic-gradient(var(--bg-hover) 0% 25%, var(--bg-subtle) 0% 50%) 0 0 / 22px 22px;
+}
+.img-view img { max-width: 100%; max-height: 72vh; object-fit: contain; display: block; }
+.img-meta {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-muted);
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  word-break: break-all;
+}
+
 /* ---------- Markdown ---------- */
 
 .markdown-body {
