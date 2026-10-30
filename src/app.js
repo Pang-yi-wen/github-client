@@ -4012,6 +4012,27 @@ function toggleLocalFav(o, r, meta, btn) {
 
 /* ---------------------------- 我的 ---------------------------- */
 
+/**
+ * 面板内即时过滤：只重绘列表容器，不重新请求。
+ * all 为数据源，row 渲染单行，matchOf 返回参与匹配的文本；emptyHtml 为数据源整体为空时的占位。
+ */
+function wireFilter(inputSel, listSel, countSel, all, row, matchOf, emptyHtml) {
+  const list = $(listSel);
+  if (!list) return;
+  const inp = $(inputSel);
+  const empty = emptyHtml || '<div class="empty">没有匹配项。</div>';
+  const upd = () => {
+    const q = inp ? inp.value.trim().toLowerCase() : '';
+    const items = !q ? all : all.filter((x) => matchOf(x).toLowerCase().indexOf(q) !== -1);
+    list.innerHTML = !all.length ? empty
+      : (items.length ? items.map(row).join('') : '<div class="empty">没有匹配项。</div>');
+    const cnt = $(countSel);
+    if (cnt) cnt.textContent = q ? items.length + ' / ' + all.length : String(all.length);
+  };
+  upd();
+  if (inp) inp.addEventListener('input', upd);
+}
+
 async function viewMe() {
   loading();
 
@@ -4080,6 +4101,10 @@ async function viewMe() {
       gh('/user/starred?per_page=40').catch(() => [])
     ]);
     document.title = u.login + ' · 我的';
+    // 三个面板共用同一套本地过滤：收藏由 updateFav 处理（含移除），仓库与 Star 走 wireFilter
+    const matchRepo = (r) => r.full_name + ' ' + (r.description || '') + ' ' + (r.language || '');
+    const filterBar = (id) => '<div class="fav-search"><input id="' + id +
+      '" type="search" enterkeyhint="search" autocomplete="off" placeholder="按名称、描述或语言过滤"></div>';
     app.innerHTML = `
       <div class="profile">
         ${avatar(u.avatar_url, 72)}
@@ -4096,17 +4121,21 @@ async function viewMe() {
       </div>
       ${favPanel(favList().length > 0)}
       <div class="panel">
-        <div class="panel-head">我的仓库 · ${repos.length}</div>
-        ${repos.length ? repos.map(repoCard).join('') : '<div class="empty">没有仓库</div>'}
+        <div class="panel-head">我的仓库 · <span id="ownCount">${repos.length}</span></div>
+        ${repos.length ? filterBar('ownSearch') : ''}
+        <div id="ownList"></div>
       </div>
       <div class="panel">
-        <div class="panel-head">已 Star · ${starred.length}
+        <div class="panel-head">已 Star · <span id="starCount">${starred.length}</span>
           <span class="spacer"></span>
           <span class="dim" style="font-size:11.5px">公开可见</span>
         </div>
-        ${starred.length ? starred.map(repoCard).join('') : '<div class="empty">还没有 Star</div>'}
+        ${starred.length ? filterBar('starSearch') : ''}
+        <div id="starList"></div>
       </div>`;
     bindFav();
+    wireFilter('#ownSearch', '#ownList', '#ownCount', repos, repoCard, matchRepo, '<div class="empty">没有仓库</div>');
+    wireFilter('#starSearch', '#starList', '#starCount', starred, repoCard, matchRepo, '<div class="empty">还没有 Star</div>');
     const nr = $('#newRepo');
     if (nr) nr.addEventListener('click', openNewRepoDialog);
   } catch (e) {
