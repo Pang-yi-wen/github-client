@@ -2914,7 +2914,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.28';
+const APP_VERSION = '1.0.29';
 'use strict';
 
 /* ============================================================
@@ -3502,13 +3502,23 @@ function rawMirrorList(o, r, ref, p) {
   list.push('https://cdn.jsdelivr.net/gh/' + encodeURIComponent(o) + '/' +
             encodeURIComponent(r) + '@' + encodeURIComponent(ref) + '/' + encPath(p).replace(/^\/+/, ''));
   list.push('https://ghproxy.net/' + raw);
-  list.push('https://mirror.ghproxy.com/' + raw);
   list.push('https://github.moeyy.xyz/' + raw);
   list.push('https://raw.gitmirror.com/' + seg);
   list.push('https://gh-proxy.org/' + raw);
   list.push('https://gh-proxy.com/' + raw);
   list.push('https://ghfast.top/' + raw);
   return list;
+}
+
+/**
+ * 图片预览用的源列表：直连 raw 挪到最后。
+ * 多数访问环境到 raw.githubusercontent.com 不通，img 逐源降级是串行的，
+ * 把它放在最前会让每张图都先等一次超时。
+ */
+function imgPreviewSources(o, r, ref, p) {
+  const list = rawMirrorList(o, r, ref, p);
+  const direct = list.filter((u) => u.indexOf(RAW_HOST) === 0);
+  return list.filter((u) => u.indexOf(RAW_HOST) !== 0).concat(direct);
 }
 
 function mirrorLabel(url) {
@@ -3782,18 +3792,22 @@ async function fetchApkMeta() {
   try { return JSON.parse(txt); } catch (_) { return null; }
 }
 
-/** 安装包是多通道可下的公开文件（文件名带版本号，内容不变），可放心走 CDN */
-function apkDownloadChannels(apkName) {
+/**
+ * 安装包下载通道。发行版直链会被部分网络拦截，因此代理变体排在前面；
+ * version.json 提供 releaseTag 时用固定的 releases/download/<tag>/<apk>，
+ * 代理跟随重定向更稳；否则退回 releases/latest/download/<apk>。
+ */
+function apkDownloadChannels(apkName, releaseTag) {
   const { owner, repo, branch } = SELF_REPO;
   const raw = 'https://raw.githubusercontent.com/' + owner + '/' + repo + '/' + branch + '/android/apk/' + apkName;
-  // 发行版资产名与 version.json 的 apk 字段保持一致，latest 由 GitHub 重定向到最新 release
-  const rel = 'https://github.com/' + owner + '/' + repo + '/releases/latest/download/' + apkName;
+  const rel = 'https://github.com/' + owner + '/' + repo + '/releases/' +
+    (releaseTag ? 'download/' + releaseTag : 'latest/download') + '/' + apkName;
   return [
     { label: 'jsDelivr CDN', url: 'https://cdn.jsdelivr.net/gh/' + owner + '/' + repo + '@' + branch + '/android/apk/' + apkName },
-    { label: 'GitHub 发行版', url: rel },
-    { label: 'ghfast.top', url: 'https://ghfast.top/' + raw },
-    { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + raw },
-    { label: 'ghproxy.net', url: 'https://ghproxy.net/' + raw },
+    { label: 'ghfast.top', url: 'https://ghfast.top/' + rel },
+    { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + rel },
+    { label: 'ghproxy.net', url: 'https://ghproxy.net/' + rel },
+    { label: 'GitHub 发行版（直链）', url: rel },
     { label: '直连 raw', url: raw }
   ];
 }
@@ -3821,7 +3835,7 @@ async function openApkDownloadDialog() {
     return;
   }
   const upToDate = sv && cmpVer(sv, meta.versionName) >= 0;
-  const chans = apkDownloadChannels(meta.apk);
+  const chans = apkDownloadChannels(meta.apk, meta.releaseTag);
   mask.innerHTML = `
     <div class="modal-card">
       <h3>下载安装包 ${esc(meta.versionName)}</h3>
@@ -4448,14 +4462,14 @@ function parseGithubUrl(raw) {
 /* ---------- 图片：多个 raw 源逐级降级，最后回落 API 二进制 ---------- */
 
 /** 依次尝试所有 raw 源，全部失败再把图片经 API 取回本地 Blob */
-function attachImgChain(img, o, r, ref, p) {
-  const sources = rawSources(o, r, ref, p);
+function attachImgChain(img, o, r, ref, p, sources) {
+  const list = sources || rawSources(o, r, ref, p);
   let i = 0;
-  img.src = sources[0];
+  img.src = list[0];
   img.addEventListener('error', function onErr() {
     i++;
-    if (i < sources.length) {
-      img.src = sources[i];
+    if (i < list.length) {
+      img.src = list[i];
     } else {
       img.removeEventListener('error', onErr);
       loadImageViaApi(img, o, r, ref, p);
@@ -4471,9 +4485,13 @@ async function loadImageViaApi(img, o, r, ref, p) {
       '/repos/' + o + '/' + r + '/contents/' + encPath(p) + '?ref=' + encodeURIComponent(ref),
       { accept: 'application/vnd.github.raw', blob: true }
     );
-    img.src = URL.createObjectURL(blob);
+    const u = URL.createObjectURL(blob);
+    trackObjectUrl(u);
+    img.src = u;
   } catch (_) {
     img.style.opacity = '.2';
+    // 文件页等调用方据此把预览区换成失败说明
+    img.dispatchEvent(new CustomEvent('imgchain-fail', { bubbles: true }));
   }
 }
 
@@ -5794,41 +5812,35 @@ async function viewBlob(o, r, ref, path) {
   let text = null;
   let size = null;
   let isBinary = false;
-  let imgBytes = null;                 // 图片文件的原始字节，用于内嵌预览
   const imgMime = IMG_MIME[ext] || '';
+  const imgMode = !!imgMime;           // 图片文件：预览走 <img> 多源，不走 fetch
 
-  // 一、raw 通道：不消耗 API 额度，多数情况下一次成功
-  try {
-    const buf = await fetchRawBytes(o, r, ref, path);
-    size = buf.length;
-    // LFS 指针是几行纯文本，raw 返回的不是图片本体，按普通文件处理
-    if (imgMime && size <= IMG_PREVIEW_MAX &&
-        !/^version https:\/\/git-lfs/.test(bytesToText(buf.slice(0, 64)))) {
-      imgBytes = buf;
-      // SVG 是文本格式，保留原文供「源码」视图
-      if (imgMime === 'image/svg+xml') text = bytesToText(buf);
-    } else if (looksBinary(buf)) isBinary = true;
-    else text = bytesToText(buf);
-  } catch (_) {
-    // 二、回退 contents API（目录、私有仓库、raw 全不可用时走这里）
+  if (imgMode) {
+    // 图片不用 fetch 读字节：实测 ghproxy.net / ghfast.top / 直连 raw 均不带跨域响应头，
+    // jsDelivr 会 301 回 raw，fetch 在浏览器里全部被拦；<img> 不受此限制，
+    // 改走与 README 图片相同的多源降级链
+    if (imgMime === 'image/svg+xml') {
+      // SVG 顺带取文本供「源码」视图；通路不带跨域头时取不到，只影响该按钮
+      try {
+        const buf = await fetchRawBytes(o, r, ref, path);
+        size = buf.length;
+        if (!looksBinary(buf) && buf.length <= IMG_PREVIEW_MAX) text = bytesToText(buf);
+      } catch (_) {}
+    }
+  } else {
+    // 一、raw 通道：不消耗 API 额度，多数情况下一次成功
     try {
-      const file = await gh('/repos/' + o + '/' + r + '/contents/' + encPath(path) +
-        '?ref=' + encodeURIComponent(ref));
-      if (Array.isArray(file)) { location.hash = link(o, r, 'tree', ref, path); return; }
-      size = file.size;
-      if (imgMime && file.size <= IMG_PREVIEW_MAX) {
-        // 图片按二进制原样取回，不经过文本解码
-        try {
-          const bl = await gh('/repos/' + o + '/' + r + '/contents/' + encPath(path) +
-            '?ref=' + encodeURIComponent(ref),
-            { accept: 'application/vnd.github.raw', blob: true });
-          const ab = await bl.arrayBuffer();
-          if (!/^version https:\/\/git-lfs/.test(bytesToText(new Uint8Array(ab.slice(0, 64))))) {
-            imgBytes = new Uint8Array(ab);
-          }
-        } catch (_) {}
-      }
-      if (!imgBytes) {
+      const buf = await fetchRawBytes(o, r, ref, path);
+      size = buf.length;
+      if (looksBinary(buf)) isBinary = true;
+      else text = bytesToText(buf);
+    } catch (_) {
+      // 二、回退 contents API（目录、私有仓库、raw 全不可用时走这里）
+      try {
+        const file = await gh('/repos/' + o + '/' + r + '/contents/' + encPath(path) +
+          '?ref=' + encodeURIComponent(ref));
+        if (Array.isArray(file)) { location.hash = link(o, r, 'tree', ref, path); return; }
+        size = file.size;
         if (file.encoding === 'base64' && file.content) {
           text = b64ToText(file.content);
         } else if (file.sha && file.size <= 2097152) {
@@ -5838,10 +5850,10 @@ async function viewBlob(o, r, ref, path) {
           } catch (_) {}
         }
         if (text === null) isBinary = true;
+      } catch (e) {
+        app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取文件', e.message);
+        return;
       }
-    } catch (e) {
-      app.innerHTML = repoHeaderLite(o, r) + errorBox('无法读取文件', e.message);
-      return;
     }
   }
 
@@ -5849,12 +5861,9 @@ async function viewBlob(o, r, ref, path) {
   if (text !== null && text.indexOf('\u0000') !== -1) { text = null; isBinary = true; }
 
   let body;
-  if (imgBytes) {
-    const url = URL.createObjectURL(new Blob([imgBytes], { type: imgMime }));
-    trackObjectUrl(url);
+  if (imgMode) {
     body = '<div class="img-view"><img id="imgPrev" alt="' + esc(name) + '"></div>' +
-      '<div class="img-meta" id="imgMeta">' + esc(name) +
-      (size !== null ? ' · ' + fmtSize(size) : '') + '</div>';
+      '<div class="img-meta" id="imgMeta">' + esc(name) + '</div>';
   } else if (text !== null) {
     let highlighted;
     if (text.length > MAX_HL) {
@@ -5885,8 +5894,8 @@ async function viewBlob(o, r, ref, path) {
         <span class="path-crumb">${crumbHtml}</span>
         <span class="spacer"></span>
         <span class="mono dim">${size !== null ? fmtSize(size) : ''}</span>
-        ${isMd && text !== null ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
-        ${isSvg && imgBytes && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
+        ${isMd && text !== null && !imgMode ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
+        ${isSvg && imgMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
         <button class="btn sm" id="dlFile">${ICON.download} 下载</button>
       </div>
       <div id="fileBody">${body}</div>
@@ -5894,15 +5903,20 @@ async function viewBlob(o, r, ref, path) {
 
   $('#dlFile').addEventListener('click', () => downloadOne(o, r, ref, path, name));
 
-  if (imgBytes) {
+  if (imgMode) {
     const box = $('#fileBody');
     box.dataset.preview = '1';
-    // 图片解码完成后补上原始尺寸
     const im = $('#imgPrev');
-    if (im) im.addEventListener('load', () => {
+    // 与 README 图片同一条多源降级链；全部失败时给出明确说明而不是灰图
+    attachImgChain(im, o, r, ref, path, imgPreviewSources(o, r, ref, path));
+    im.addEventListener('load', () => {
       const m = $('#imgMeta');
-      if (m) m.textContent = name + ' · ' + im.naturalWidth + ' × ' + im.naturalHeight +
-        (size !== null ? ' · ' + fmtSize(size) : '');
+      if (m) m.textContent = name + ' · ' + im.naturalWidth + ' × ' + im.naturalHeight;
+    });
+    im.addEventListener('imgchain-fail', () => {
+      box.innerHTML = '<div class="binary-note">图片预览失败：文件可能为 Git LFS 指针、已被删除，' +
+        '或所有镜像暂不可用。<br><br>可点击顶栏「下载」获取原文件。</div>';
+      box.dataset.preview = '0';
     });
     if (isSvg && text !== null) {
       $('#svgToggle').addEventListener('click', (ev) => {
