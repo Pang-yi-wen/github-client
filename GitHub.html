@@ -2966,7 +2966,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.39';
+const APP_VERSION = '1.0.40';
 'use strict';
 
 /* ============================================================
@@ -5038,9 +5038,13 @@ function openAuthPrompt() {
 
 const TR_CACHE = 'ghtr:';
 let browserTr;   // undefined=未探测, null=不支持, 否则是 Translator 实例
+/** 翻译方向跟随界面语言：中文界面译成中文，English 界面译成英文 */
+const trTarget = () => (LS.get('ghl_lang', 'zh') === 'en' ? 'en' : 'zh');
+const trSource = () => (trTarget() === 'en' ? 'auto' : 'en');
 
 /** 粗略判断是否以英文为主：剔除代码、链接、标签后，汉字占比低于 10% 才算 */
-function looksEnglish(text) {
+/** 是否值得翻译：按目标方向判断（zh 目标看内容是否以英文为主，en 目标看是否含中日韩文本） */
+function needsTranslate(text) {
   let t = String(text || '');
   t = t.replace(/```[\s\S]*?```/g, ' ');          // 代码块
   t = t.replace(/`[^`\n]*`/g, ' ');                // 行内代码
@@ -5048,10 +5052,11 @@ function looksEnglish(text) {
   t = t.replace(/https?:\/\/\S+/g, ' ');           // 裸链接
   t = t.replace(/<[^>]+>/g, ' ');                  // HTML 标签
 
-  const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+  const cjk = (t.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
   const latin = (t.match(/[A-Za-z]/g) || []).length;
   const total = cjk + latin;
   if (total < 120) return false;                   // 太短不判断
+  if (trTarget() === 'en') return cjk > 0 && cjk / total > 0.02;
   return cjk / total < 0.10;
 }
 
@@ -5094,15 +5099,17 @@ function skipLine(line) {
 }
 
 async function getBrowserTranslator() {
-  if (browserTr !== undefined) return browserTr;
+  const dir = trSource() + '>' + trTarget();
+  if (browserTr && browserTr.dir === dir) return browserTr;
   if (typeof self.Translator !== 'object' || !self.Translator) { browserTr = null; return null; }
   try {
     if (self.Translator.availability) {
-      const st = await self.Translator.availability({ sourceLanguage: 'en', targetLanguage: 'zh' });
+      const st = await self.Translator.availability({ sourceLanguage: trSource(), targetLanguage: trTarget() });
       if (st === 'unavailable') { browserTr = null; return null; }
       if (st === 'downloadable') { browserTr = null; return null; }  // 需要下载模型，不擅自触发
     }
-    browserTr = await self.Translator.create({ sourceLanguage: 'en', targetLanguage: 'zh' });
+    browserTr = await self.Translator.create({ sourceLanguage: trSource(), targetLanguage: trTarget() });
+    browserTr.dir = dir;   // 界面语言切换后方向变了，重建实例
   } catch (_) {
     browserTr = null;
   }
@@ -5122,6 +5129,8 @@ async function fetchT(url, opts, ms) {
 
 /** MyMemory：单次 500 字符上限 */
 async function myMemoryTranslate(text) {
+  // MyMemory 不支持自动检测：英文界面下源语言未知，直接让该通道失败走兜底
+  if (trTarget() !== 'zh') throw new Error('MyMemory 仅支持英译中');
   const url = 'https://api.mymemory.translated.net/get?langpair=en|zh-CN&q=' +
     encodeURIComponent(text.slice(0, 480));
   const res = await fetchT(url, {}, 12000);
@@ -5148,7 +5157,7 @@ async function libreTranslate(text) {
   if (!base) throw new Error('未配置 LibreTranslate 地址');
   const key = String(LS.get('ghl_translate_key', '') || '').trim();
 
-  const body = { q: text, source: 'en', target: 'zh', format: 'text' };
+  const body = { q: text, source: trTarget() === 'en' ? 'auto' : 'en', target: trTarget(), format: 'text' };
   if (key) body.api_key = key;
 
   const res = await fetchT(base + '/translate', {
@@ -5171,8 +5180,8 @@ async function tencentTranslate(list) {
       header: { fn: 'auto_translation', client_key: 'browser-chrome-110.0.0-Mac OS' },
       type: 'plain',
       model_category: 'normal',
-      source: { lang: 'en', text_list: list },
-      target: { lang: 'zh' }
+      source: { lang: trSource() === 'auto' ? 'auto' : 'en', text_list: list },
+      target: { lang: trTarget() }
     })
   }, 10000);
   if (!res.ok) throw new Error('腾讯翻译 HTTP ' + res.status);
@@ -5215,6 +5224,12 @@ async function bilibiliChat(system, user, ms) {
 
 /** 术语与风格：LLM 通道（B 站 / Pollinations）共用的系统提示，保证全篇译法一致 */
 function trStyleSystem() {
+  if (trTarget() === 'en') {
+    const prefEn = String(LS.get('ghl_tr_style', '') || '').trim();
+    let sysEn = 'You are a translation engine. Translate the user text into English, keeping the Markdown structure and line breaks. ' +
+      'Keep code identifiers, filenames, command-line samples and proper nouns untranslated. Output only the translation.';
+    return prefEn ? sysEn + ' User preference: ' + prefEn : sysEn;
+  }
   const base = '你是翻译引擎。把用户文本译成简体中文，保留 Markdown 结构与换行，只输出译文。' +
     '术语全篇一致：repository→仓库、issue→议题、pull request→拉取请求、commit→提交、fork→复刻、' +
     'release→发行版、workflow→工作流、CLI→命令行；代码标识符、文件名、命令行示例与专有名词保留原文，不翻译。';
@@ -5248,7 +5263,8 @@ async function bilibiliTranslateBatch(list) {
 
 /** Pollinations：免密钥的文本生成接口，用作翻译通道。慢，适合兜底 */
 async function pollinationsTranslate(text) {
-  const q = 'Translate the following English text into Simplified Chinese. ' +
+  const tgt = trTarget() === 'en' ? 'English' : 'Simplified Chinese';
+  const q = 'Translate the following text into ' + tgt + '. ' +
     'Keep Markdown structure, keep code identifiers and proper nouns untranslated. ' +
     'Output only the translation, without explanation or quotes:\n\n' + text;
   const ctrl = new AbortController();
@@ -5425,7 +5441,7 @@ function splitSentences(text, max) {
  */
 async function translateBlock(text, onTick) {
   // 段级缓存：README 有改动时，未变的段落直接复用上次译文，不再发请求
-  const sk = segCacheKey(text);
+  const sk = 'seg:' + trTarget() + ':' + segCacheKey(text);
   const hit = trCacheGet(sk);
   if (hit !== null) {
     trStats.cache++;
@@ -5435,13 +5451,14 @@ async function translateBlock(text, onTick) {
   const bt = await getBrowserTranslator();
   const maxChars = bt ? 1600 : 2400;
 
-  const lines = text.split('\n');
+    const lines = text.split('\n');
   const jobs = [];
   lines.forEach((line, i) => {
     if (skipLine(line)) return;
     const [prefix, body] = splitLinePrefix(line);
     if (!body.trim()) return;
-    if (mostlyChinese(body)) return;   // 已是中文的行不送翻译，省请求也防“译文”退化
+    // 目标方向上已是目标语言的行不送翻译（中文界面跳过中文行，英文界面跳过英文行）
+    if (trTarget() === 'en' ? !/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(body) : mostlyChinese(body)) return;
     const g = protectInline(body);
     if (!g.text.trim()) return;
     jobs.push({ idx: i, prefix: prefix, guarded: g.text, map: g.map });
@@ -5519,8 +5536,11 @@ async function translateMarkdown(md, onTick, onPart) {
   const parts = splitMd(md);
   const idxs = [];
   parts.forEach((p, i) => {
-    // 代码段与已是中文的段都不进翻译队列
-    if (!p.code && !mostlyChinese(p.text)) idxs.push(i);
+    // 代码段与已是目标语言的段都不进翻译队列
+    const skip = p.code || (trTarget() === 'en'
+      ? !/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(p.text)
+      : mostlyChinese(p.text));
+    if (!skip) idxs.push(i);
   });
   const total = idxs.length;
   if (!total) return md;
@@ -5599,7 +5619,8 @@ const trAutoShow = () => LS.get('ghl_tr_auto', '0') === '1';
  * original：原文 markdown；bodyEl：渲染容器；render：把 markdown 变 HTML 的方法
  */
 function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
-  let translated = trCacheGet(cacheKey);
+  const ck = cacheKey + ':' + trTarget();   // 缓存按目标语言分开
+  let translated = trCacheGet(ck);
   let showing = false;
 
   const paint = (md) => {
@@ -5635,10 +5656,12 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       return;
     }
 
-    // 整篇已是中文：不解释、不发请求
+    // 整篇已是目标语言：不发请求（中文界面跳过中文，英文界面跳过英文）
     const cjk = (original.match(/[\u4e00-\u9fff]/g) || []).length;
-    if (cjk > 20 && cjk > ((original.match(/[A-Za-z]/g) || []).length * 0.5)) {
-      toast(T('内容主要是中文，无需翻译', 'Already mostly Chinese; nothing to translate'));
+    const noCjk = !/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(original);
+    if ((trTarget() === 'zh' && cjk > 20 && cjk > ((original.match(/[A-Za-z]/g) || []).length * 0.5)) ||
+        (trTarget() === 'en' && noCjk)) {
+      toast(T('内容已是目标语言，无需翻译', 'Already in the target language; nothing to translate'));
       return;
     }
 
@@ -5666,7 +5689,7 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
         });
       if (!out || out === original) throw new Error('未产生译文');
       translated = out;
-      trCacheSet(cacheKey, out);
+      trCacheSet(ck, out);
       showing = true;
       paint(out);
       const cn = { tencent: T('腾讯', 'Tencent'), bilibili: T('B 站', 'Bilibili'), pollinations: 'Pollinations',
@@ -5702,7 +5725,7 @@ function attachBlockTranslate(container, text, ctx, cacheKey) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn sm ghost';
-  btn.textContent = '译成中文';
+  btn.textContent = T('译成中文', 'Translate');
   head.appendChild(btn);
   container.parentNode.insertBefore(head, container);
   bindTranslate(btn, container, text, ctx, cacheKey);
@@ -5818,11 +5841,11 @@ async function viewRepo(o, r) {
     try {
       const raw = b64ToText(readme.content);
       const md = renderMarkdown(raw, ctx);
-      const needTr = looksEnglish(raw);
+      const needTr = needsTranslate(raw);
       readmeSrc = { text: raw, needTr: needTr };
       readmeHtml = `<div class="panel"><div class="panel-head">
           ${ICON.file}<span class="path-crumb">${esc(readme.path)}</span>
-          ${needTr ? '<button class="btn sm ghost" id="trBtn" title="把介绍译成中文">译成中文</button>' : ''}
+          ${needTr ? '<button class="btn sm ghost" id="trBtn" title="' + T('把介绍译成目标语言', 'Translate this README') + '">' + T('译成中文', 'Translate') + '</button>' : ''}
           <span class="spacer"></span>
           <a class="btn sm ghost" href="${link(o, r, 'blob', ref, readme.path)}">源码</a>
         </div><div class="readme-box markdown-body" id="readmeBody">${md.innerHTML}</div></div>`;
