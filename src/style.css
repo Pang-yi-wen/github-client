@@ -1225,7 +1225,10 @@ mark {
   line-height: 1.55;
   white-space: pre;
 }
-.markdown-body img { max-width: 100%; border-radius: 6px; background: var(--bg-subtle); }
+.markdown-body img { max-width: 100%; height: auto; border-radius: 6px; background: var(--bg-subtle); }
+/* 渲染视图兜底：宽表格 / 长代码撑宽时容器内滚动，而不是被 panel 裁掉一半 */
+#fileBody { overflow-x: auto; }
+.markdown-body pre { overflow-x: auto; max-width: 100%; }
 .markdown-body table {
   border-collapse: collapse;
   margin: 0 0 1em;

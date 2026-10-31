@@ -3785,7 +3785,10 @@ const SEARCH_LANGS = [
   ['python', 'Python'], ['java', 'Java'], ['go', 'Go'], ['rust', 'Rust'],
   ['c', 'C'], ['cpp', 'C++'], ['csharp', 'C#'], ['php', 'PHP'], ['ruby', 'Ruby'],
   ['swift', 'Swift'], ['kotlin', 'Kotlin'], ['dart', 'Dart'], ['shell', 'Shell'],
-  ['html', 'HTML'], ['css', 'CSS'], ['vue', 'Vue'], ['lua', 'Lua'], ['r', 'R']
+  ['html', 'HTML'], ['css', 'CSS'], ['vue', 'Vue'], ['lua', 'Lua'], ['r', 'R'],
+  ['scala', 'Scala'], ['haskell', 'Haskell'], ['elixir', 'Elixir'], ['perl', 'Perl'],
+  ['objective-c', 'Objective-C'], ['sql', 'SQL'], ['matlab', 'MATLAB'], ['julia', 'Julia'],
+  ['zig', 'Zig'], ['powershell', 'PowerShell'], ['dockerfile', 'Dockerfile'], ['assembly', 'Assembly']
 ];
 
 /** 相对时间 → 具体日期，用于 pushed:>= 限定 */
@@ -3812,7 +3815,7 @@ function composeSearchQuery(base, type, f) {
 
   if (type === 'repositories') {
     // GitHub 没有“有 APK”限定符，用 topic 近似：android-app / f-droid / android
-    if (f.android) add('topic', f.android);
+    if (f.os) add('topic', f.os);
     if (f.stars) add('stars', '>=' + f.stars);
     const d = pushedDate(f.pushed);
     if (d) add('pushed', '>=' + d);
@@ -3852,45 +3855,48 @@ function searchFilterBar(type, f, prefix) {
   const parts = [];
 
   if (type === 'repositories') {
-    parts.push(box('排序', select('sort', [
-      ['', '最佳匹配'], ['stars', 'Star 最多'], ['forks', 'Fork 最多'],
-      ['updated', '最近更新'], ['help-wanted-issues', '待协助最多']
+    parts.push(box(T('排序', 'Sort'), select('sort', [
+      ['', T('最佳匹配', 'Best match')], ['stars', T('Star 最多', 'Most stars')], ['forks', T('Fork 最多', 'Most forks')],
+      ['updated', T('最近更新', 'Recently updated')], ['help-wanted-issues', T('待协助最多', 'Most help wanted')]
     ], f.sort)));
-    parts.push(box('语言', select('lang', SEARCH_LANGS, f.lang)));
-    parts.push(box('Android', select('android', [
-      ['', '不限'], ['android-app', 'Android 应用'], ['f-droid', 'F-Droid 应用'], ['android', 'Android 项目']
-    ], f.android)));
+    parts.push(box(T('语言', 'Language'), select('lang', SEARCH_LANGS.map(([v, t]) => [v, v === '' ? T(t, 'Any language') : t]), f.lang)));
+    parts.push(box(T('操作系统', 'OS'), select('os', [
+      ['', T('不限', 'Any')], ['windows', 'Windows'], ['macos', 'macOS'], ['linux', 'Linux'],
+      ['android', 'Android'], ['ios', 'iOS']
+    ], f.os)));
     parts.push(box('Star', select('stars', [
-      ['', '不限'], ['50', '≥ 50'], ['500', '≥ 500'], ['5000', '≥ 5000'], ['20000', '≥ 2 万']
+      ['', T('不限', 'Any')], ['50', '≥ 50'], ['500', '≥ 500'], ['5000', '≥ 5000'], ['20000', '≥ 2 万']
     ], f.stars)));
-    parts.push(box('更新', select('pushed', [
-      ['', '不限'], ['week', '一周内'], ['month', '一月内'], ['year', '一年内']
+    parts.push(box(T('更新', 'Updated'), select('pushed', [
+      ['', T('不限', 'Any')], ['week', T('一周内', 'This week')], ['month', T('一月内', 'This month')], ['year', T('一年内', 'This year')]
     ], f.pushed)));
   } else if (type === 'code') {
-    parts.push(box('语言', select('lang', SEARCH_LANGS, f.lang)));
-    parts.push(box('限定仓库', input('repo', 'owner/repo', f.repo)));
-    parts.push(box('路径', input('path', 'src/components', f.path)));
+    parts.push(box(T('语言', 'Language'), select('lang', SEARCH_LANGS.map(([v, t]) => [v, v === '' ? T(t, 'Any language') : t]), f.lang)));
+    parts.push(box(T('限定仓库', 'Repository'), input('repo', 'owner/repo', f.repo)));
+    parts.push(box(T('路径', 'Path'), input('path', 'src/components', f.path)));
   } else if (type === 'users') {
-    parts.push(box('排序', select('sort', [
-      ['', '最佳匹配'], ['followers', '关注者最多'], ['repositories', '仓库最多'], ['joined', '最近加入']
+    parts.push(box(T('排序', 'Sort'), select('sort', [
+      ['', T('最佳匹配', 'Best match')], ['followers', T('关注者最多', 'Most followers')],
+      ['repositories', T('仓库最多', 'Most repos')], ['joined', T('最近加入', 'Newest')]
     ], f.sort)));
-    parts.push(box('类型', select('utype', [
-      ['', '不限'], ['user', '用户'], ['org', '组织']
+    parts.push(box(T('类型', 'Type'), select('utype', [
+      ['', T('不限', 'Any')], ['user', T('用户', 'User')], ['org', T('组织', 'Org')]
     ], f.utype)));
-    parts.push(box('仓库数', select('repos', [
-      ['', '不限'], ['10', '≥ 10'], ['50', '≥ 50'], ['200', '≥ 200']
+    parts.push(box(T('仓库数', 'Repos'), select('repos', [
+      ['', T('不限', 'Any')], ['10', '≥ 10'], ['50', '≥ 50'], ['200', '≥ 200']
     ], f.repos)));
   } else if (type === 'issues') {
-    parts.push(box('排序', select('sort', [
-      ['', '最佳匹配'], ['comments', '评论最多'], ['created', '最新创建'], ['updated', '最近更新']
+    parts.push(box(T('排序', 'Sort'), select('sort', [
+      ['', T('最佳匹配', 'Best match')], ['comments', T('评论最多', 'Most commented')],
+      ['created', T('最新创建', 'Newest')], ['updated', T('最近更新', 'Recently updated')]
     ], f.sort)));
-    parts.push(box('状态', select('state', [
-      ['', '不限'], ['open', '打开'], ['closed', '已关闭']
+    parts.push(box(T('状态', 'State'), select('state', [
+      ['', T('不限', 'Any')], ['open', T('打开', 'Open')], ['closed', T('已关闭', 'Closed')]
     ], f.state)));
-    parts.push(box('类型', select('kind', [
-      ['', '议题和 PR'], ['issue', '仅议题'], ['pr', '仅 PR']
+    parts.push(box(T('类型', 'Kind'), select('kind', [
+      ['', T('议题和 PR', 'Issues & PRs')], ['issue', T('仅议题', 'Issues only')], ['pr', T('仅 PR', 'PRs only')]
     ], f.kind)));
-    parts.push(box('标签', input('label', 'bug', f.label)));
+    parts.push(box(T('标签', 'Label'), input('label', 'bug', f.label)));
   }
 
   return '<div class="filter-bar">' + parts.join('') + '</div>';
@@ -3899,7 +3905,7 @@ function searchFilterBar(type, f, prefix) {
 /** 筛选控件改动后写回 URL，交给路由重绘 */
 function bindSearchFilters() {
   const map = {
-    'f-sort': 'sort', 'f-lang': 'lang', 'f-android': 'android', 'f-stars': 'stars', 'f-pushed': 'pushed',
+    'f-sort': 'sort', 'f-lang': 'lang', 'f-os': 'os', 'f-stars': 'stars', 'f-pushed': 'pushed',
     'f-repo': 'repo', 'f-path': 'path', 'f-utype': 'utype', 'f-repos': 'repos',
     'f-state': 'state', 'f-kind': 'kind', 'f-label': 'label'
   };
@@ -3974,7 +3980,7 @@ async function viewSearch(q, type, params) {
     sort: params.get('sort') || '',
     order: params.get('order') || 'desc',
     lang: params.get('lang') || '',
-    android: params.get('android') || '',
+    os: params.get('os') || params.get('android') || '',
     stars: params.get('stars') || '',
     pushed: params.get('pushed') || '',
     repo: params.get('repo') || '',
@@ -6097,7 +6103,7 @@ const SEARCH_TYPES = [
 
 function emptyFilters() {
   return {
-    sort: '', lang: '', android: '', stars: '', pushed: '', repo: '', path: '',
+    sort: '', lang: '', os: '', stars: '', pushed: '', repo: '', path: '',
     label: '', utype: '', repos: '', state: '', kind: ''
   };
 }
@@ -6181,6 +6187,7 @@ function histSummary(it) {
   const pair = SEARCH_TYPES.filter((x) => x[0] === (it.type || 'repositories'))[0];
   const bits = [pair ? pair[1] : '仓库'];
   if (f.lang) bits.push('语言 ' + f.lang);
+  if (f.os) bits.push('OS ' + f.os);
   if (f.stars) bits.push('★>' + f.stars);
   if (f.pushed) bits.push(f.pushed);
   if (f.sort) bits.push('排序 ' + f.sort);
