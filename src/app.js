@@ -3047,7 +3047,13 @@ async function viewBlob(o, r, ref, path) {
   document.title = name + ' · ' + o + '/' + r;
   if (text !== null && text.indexOf('\u0000') !== -1) { text = null; isBinary = true; }
 
+  const isMd = /\.(md|markdown|mdx)$/i.test(name);
+  const isSvg = imgMime === 'image/svg+xml';
+  const mdCtx = { owner: o, repo: r, ref, baseDir: dir };
+  const mdKey = o + '/' + r + '@' + ref + ':' + path;
+
   let body;
+  let codeBody = null;
   if (mediaMode) {
     const tag = mediaKind === 'video'
       ? '<video id="mediaPrev" controls playsinline preload="metadata"></video>'
@@ -3068,17 +3074,19 @@ async function viewBlob(o, r, ref, path) {
       highlighted = esc(text);
     }
     const lines = text.split('\n').length;
-    body = '<div class="code-view">' +
+    codeBody = '<div class="code-view">' +
       '<div class="gutter">' + Array.from({ length: lines }, (_, i) => i + 1).join('\n') + '</div>' +
       '<pre><code class="hljs">' + highlighted + '</code></pre></div>';
+    // README 的语言切换链接（README.zh-CN.md 等）会落到 blob 视图：
+    // .md 默认渲染预览，源码收进「源码」按钮
+    body = isMd
+      ? '<div class="readme-box markdown-body">' + renderMarkdown(text, mdCtx).innerHTML + '</div>'
+      : codeBody;
   } else {
     body = '<div class="binary-note">' +
       '二进制文件' + (size !== null ? '（' + fmtSize(size) + '）' : '') + '，无法直接预览。<br><br>' +
       '<button class="btn primary" id="dlFile">' + ICON.download + ' 下载文件</button></div>';
   }
-
-  const isMd = /\.(md|markdown|mdx)$/i.test(name);
-  const isSvg = imgMime === 'image/svg+xml';
 
   app.innerHTML = (repo ? repoHeader(repo, 'code') : repoHeaderLite(o, r)) + `
     <div class="panel">
@@ -3087,7 +3095,7 @@ async function viewBlob(o, r, ref, path) {
         <span class="path-crumb">${crumbHtml}</span>
         <span class="spacer"></span>
         <span class="mono dim">${size !== null ? fmtSize(size) : ''}</span>
-        ${isMd && text !== null && !mediaMode ? '<button class="btn sm ghost" id="mdToggle">预览</button>' : ''}
+        ${isMd && text !== null && !mediaMode ? '<button class="btn sm ghost" id="mdToggle">源码</button>' : ''}
         ${isSvg && mediaMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
         <button class="btn sm" id="dlFile">${ICON.download} 下载</button>
       </div>
@@ -3150,16 +3158,19 @@ async function viewBlob(o, r, ref, path) {
   }
 
   if (isMd && text !== null) {
+    const box = $('#fileBody');
+    box.dataset.preview = '1';
+    const bindTr = () => attachBlockTranslate(box, text, mdCtx, mdKey);
+    bindTr();   // 语言切换进来的 README 渲染视图同样可译
     $('#mdToggle').addEventListener('click', (ev) => {
-      const box = $('#fileBody');
       if (box.dataset.preview === '1') {
-        box.innerHTML = body;
+        box.innerHTML = codeBody;
         box.dataset.preview = '0';
         ev.target.textContent = '预览';
       } else {
-        const md = renderMarkdown(text, { owner: o, repo: r, ref, baseDir: dir });
-        box.innerHTML = '<div class="readme-box markdown-body">' + md.innerHTML + '</div>';
+        box.innerHTML = body;
         box.dataset.preview = '1';
+        bindTr();
         ev.target.textContent = '源码';
       }
     });
