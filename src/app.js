@@ -102,6 +102,11 @@ function rawSources(o, r, ref, p) {
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
 
+/* ---------- 界面语言（zh / en）：新加的界面文本两处都写，保持同步 ---------- */
+const T = (zh, en) => (LS.get('ghl_lang', 'zh') === 'en' ? en : zh);
+const TR_CH = { tencent: 'Tencent', bilibili: 'Bilibili', pollinations: 'Pollinations',
+  libre: 'LibreTranslate', mymemory: 'MyMemory', browser: 'Built-in model' };
+
 /* ---------------------------- 图标 ---------------------------- */
 
 const ICON = {
@@ -226,8 +231,8 @@ function saveToken(t) {
 function updateAuthBadge() {
   const b = $('#auth');
   if (!b) return;
-  if (TOKEN) { b.textContent = '已授权'; b.classList.add('ok'); }
-  else { b.textContent = '未授权'; b.classList.remove('ok'); }
+  if (TOKEN) { b.textContent = T('已授权', 'Signed in'); b.classList.add('ok'); }
+  else { b.textContent = T('未授权', 'Sign in'); b.classList.remove('ok'); }
 }
 
 /* ---------------------------- API ---------------------------- */
@@ -1845,24 +1850,26 @@ function bindFileRows(scope) {
 /* ---------------------------- 首页 ---------------------------- */
 
 async function viewHome() {
-  document.title = 'GitHub 本地客户端';
+  document.title = T('GitHub 本地客户端', 'GitHub Client');
   const homeHist = histHomeHtml(6);
   app.innerHTML = `
     <div class="hero">
-      <h1>一个更轻的 GitHub 入口。</h1>
-      <p>只读官方接口，不依赖网页前端，也不经过本站服务器。网络不佳时会自动换一条通路。</p>
+      <h1>${T('一个更轻的 GitHub 入口。', 'A lighter window into GitHub.')}</h1>
+      <p>${T('只读官方接口，不依赖网页前端，也不经过本站服务器。网络不佳时会自动换一条通路。',
+             'Read-only official API. No web frontend, no middle server. Falls back to another route automatically when the network degrades.')}</p>
     </div>
     ${TOKEN ? '' : authBanner()}
     <div class="quick-links">
-      <a class="btn" href="#/tools">通路与下载</a>
-      <a class="btn" href="#/me">我的仓库</a>
-      <a class="btn" href="#/search?q=stars:%3E10000&type=repositories">热门仓库</a>
-      <a class="btn" href="#/notifications">通知</a>
-      <button class="btn" id="fromClip">从剪贴板打开</button>
+      <a class="btn" href="#/tools">${T('通路与下载', 'Routes & Downloads')}</a>
+      <a class="btn" href="#/me">${T('我的仓库', 'My Repos')}</a>
+      <a class="btn" href="#/search?q=stars:%3E10000&type=repositories">${T('热门仓库', 'Trending')}</a>
+      <a class="btn" href="#/notifications">${T('通知', 'Notifications')}</a>
+      <button class="btn" id="fromClip">${T('从剪贴板打开', 'Open from clipboard')}</button>
     </div>
-    <p class="hero-tip">点开上方搜索会展开整个面板：挑好类型与条件再一次提交，粘 github.com 链接则直接跳到对应页面。</p>
+    <p class="hero-tip">${T('点开上方搜索会展开整个面板：挑好类型与条件再一次提交，粘 github.com 链接则直接跳到对应页面。',
+      'The search above expands into a full panel: pick type and filters, then search once. Pasted github.com links open directly.')}</p>
     ${homeHist ? `<div class="panel" style="margin-bottom:14px">
-        <div class="panel-head">最近搜索</div>
+        <div class="panel-head">${T('最近搜索', 'Recent searches')}</div>
         <div class="hist-row" id="homeHist">${homeHist}</div>
       </div>` : ''}
     <div class="grid-2">
@@ -1910,14 +1917,15 @@ async function viewHome() {
 
 function authBanner() {
   return `<div class="empty-state">
-    <h3>开始使用</h3>
-    <p class="hint">未登录时可以浏览公开内容，匿名调用每小时 60 次；填入令牌后提升到 5000 次/小时，并能查看自己的仓库与收藏。</p>
+    <h3>${T('开始使用', 'Get started')}</h3>
+    <p class="hint">${T('未登录时可以浏览公开内容，匿名调用每小时 60 次；填入令牌后提升到 5000 次/小时，并能查看自己的仓库与收藏。',
+      'Browse public content anonymously at 60 requests/hour; a token raises it to 5000/hour and unlocks your own repos and stars.')}</p>
     <div class="empty-actions">
-      <button class="btn primary" id="esBrowse">浏览公开仓库</button>
-      <button class="btn" id="openToken">设置令牌</button>
-      <button class="btn ghost" id="esSignup">注册账号</button>
+      <button class="btn primary" id="esBrowse">${T('浏览公开仓库', 'Browse public repos')}</button>
+      <button class="btn" id="openToken">${T('设置令牌', 'Set token')}</button>
+      <button class="btn ghost" id="esSignup">${T('注册账号', 'Sign up')}</button>
     </div>
-    <button class="link-btn" id="esGuide">查看 3 步新手指引 →</button>
+    <button class="link-btn" id="esGuide">${T('查看 3 步新手指引 →', 'Open the 3-step guide →')}</button>
   </div>`;
 }
 
@@ -2390,8 +2398,9 @@ async function translateBatch(items) {
 /** 行内代码、链接、图片不参与翻译，先换成占位符 */
 function protectInline(s) {
   const map = [];
+  // 整个链接 [text](url) 一起保护：URL 换占位符后模型会把括号改成全角、或重排方括号，还原即坏
   const text = String(s).replace(
-    /`[^`\n]+`|https?:\/\/[^\s)\]}>,，。"']+|!\[[^\]]*\]\([^)]*\)/g,
+    /`[^`\n]+`|!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\([^)]*\)|https?:\/\/[^\s)\]}>,，。"']+/g,
     (m) => {
       let body = m;
       let tail = '';
@@ -2625,9 +2634,9 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
   };
 
   const label = () => {
-    if (showing) btn.textContent = '看原文';
-    else if (translated) btn.textContent = '看译文';
-    else btn.textContent = '译成中文';
+    if (showing) btn.textContent = T('看原文', 'Original');
+    else if (translated) btn.textContent = T('看译文', 'Translated');
+    else btn.textContent = T('译成中文', 'Translate');
   };
   label();
 
@@ -2655,12 +2664,12 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
     // 整篇已是中文：不解释、不发请求
     const cjk = (original.match(/[\u4e00-\u9fff]/g) || []).length;
     if (cjk > 20 && cjk > ((original.match(/[A-Za-z]/g) || []).length * 0.5)) {
-      toast('内容主要是中文，无需翻译');
+      toast(T('内容主要是中文，无需翻译', 'Already mostly Chinese; nothing to translate'));
       return;
     }
 
     btn.disabled = true;
-    btn.textContent = '翻译中…';
+    btn.textContent = T('翻译中…', 'Translating…');
     try {
       const bt = await getBrowserTranslator();
       if (!bt) {
@@ -2673,7 +2682,7 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       }
       let lastPaint = 0;
       const out = await translateMarkdown(original,
-        (a, b) => { btn.textContent = '翻译中 ' + a + '/' + b; },
+        (a, b) => { btn.textContent = T('翻译中 ', 'Translating ') + a + '/' + b; },
         (partial) => {
           // 译好一段先显示一段，未完成的段落保持原文
           const now = Date.now();
@@ -2686,10 +2695,11 @@ function bindTranslate(btn, bodyEl, original, ctx, cacheKey) {
       trCacheSet(cacheKey, out);
       showing = true;
       paint(out);
-      const cn = { tencent: '腾讯', bilibili: 'B 站', pollinations: 'Pollinations',
-        libre: 'LibreTranslate', mymemory: 'MyMemory', browser: '浏览器内置' }[trStats.ch] || '在线通道';
-      toast('已译为中文 · ' + cn + ' · ' + trStats.segs + ' 段' +
-        (trStats.cache ? ' · 缓存命中 ' + trStats.cache + ' 段' : '') +
+      const cn = { tencent: T('腾讯', 'Tencent'), bilibili: T('B 站', 'Bilibili'), pollinations: 'Pollinations',
+        libre: 'LibreTranslate', mymemory: 'MyMemory', browser: T('浏览器内置', 'Built-in model') }[trStats.ch] || T('在线通道', 'online channel');
+      toast(T('已译为中文', 'Translated') + ' · ' + cn + ' · ' + trStats.segs +
+        T(' 段', ' segments') +
+        (trStats.cache ? ' · ' + T('缓存命中 ' + trStats.cache + ' 段', trStats.cache + ' from cache') : '') +
         ' · ' + (trStats.ms / 1000).toFixed(1) + 's', 5000);
     } catch (e) {
       toast('翻译失败：' + e.message + '。可在设置里填自建 LibreTranslate 地址', 6000);
@@ -3084,8 +3094,8 @@ async function viewBlob(o, r, ref, path) {
       : codeBody;
   } else {
     body = '<div class="binary-note">' +
-      '二进制文件' + (size !== null ? '（' + fmtSize(size) + '）' : '') + '，无法直接预览。<br><br>' +
-      '<button class="btn primary" id="dlFile">' + ICON.download + ' 下载文件</button></div>';
+      T('二进制文件', 'Binary file') + (size !== null ? ' (' + fmtSize(size) + ')' : '') + T('，无法直接预览。', ', no inline preview.') + '<br><br>' +
+      '<button class="btn primary" id="dlFile">' + ICON.download + ' ' + T('下载文件', 'Download file') + '</button></div>';
   }
 
   app.innerHTML = (repo ? repoHeader(repo, 'code') : repoHeaderLite(o, r)) + `
@@ -3095,9 +3105,9 @@ async function viewBlob(o, r, ref, path) {
         <span class="path-crumb">${crumbHtml}</span>
         <span class="spacer"></span>
         <span class="mono dim">${size !== null ? fmtSize(size) : ''}</span>
-        ${isMd && text !== null && !mediaMode ? '<button class="btn sm ghost" id="mdToggle">源码</button>' : ''}
-        ${isSvg && mediaMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">源码</button>' : ''}
-        <button class="btn sm" id="dlFile">${ICON.download} 下载</button>
+        ${isMd && text !== null && !mediaMode ? '<button class="btn sm ghost" id="mdToggle">' + T('源码', 'Source') + '</button>' : ''}
+        ${isSvg && mediaMode && text !== null ? '<button class="btn sm ghost" id="svgToggle">' + T('源码', 'Source') + '</button>' : ''}
+        <button class="btn sm" id="dlFile">${ICON.download} ${T('下载', 'Download')}</button>
       </div>
       <div id="fileBody">${body}</div>
     </div>`;
@@ -3128,9 +3138,9 @@ async function viewBlob(o, r, ref, path) {
       });
     }
     el.addEventListener('mediachain-fail', () => {
-      const what = mediaKind === 'img' ? '图片' : (mediaKind === 'video' ? '视频' : '音频');
-      box.innerHTML = '<div class="binary-note">' + what + '预览失败：可能为 Git LFS 指针、' +
-        '浏览器不支持该格式，或所有镜像暂不可用。<br><br>可点击顶栏「下载」获取原文件。</div>';
+      const what = mediaKind === 'img' ? T('图片', 'Image') : (mediaKind === 'video' ? T('视频', 'Video') : T('音频', 'Audio'));
+      box.innerHTML = '<div class="binary-note">' + what + T('预览失败：可能为 Git LFS 指针、', 'Preview failed: possibly a Git LFS pointer, ') + +
+        T('浏览器不支持该格式，或所有镜像暂不可用。<br><br>可点击顶栏「下载」获取原文件。', 'an unsupported format, or all mirrors being down. Use the Download button above.') + '</div>';
       box.dataset.preview = '0';
     });
     if (isSvg && text !== null) {
@@ -3147,11 +3157,11 @@ async function viewBlob(o, r, ref, path) {
             Array.from({ length: lines }, (_, i) => i + 1).join('\n') +
             '</div><pre><code class="hljs">' + hl + '</code></pre></div>';
           box.dataset.preview = '0';
-          ev.target.textContent = '图片';
+          ev.target.textContent = T('图片', 'Image');
         } else {
           box.innerHTML = body;
           box.dataset.preview = '1';
-          ev.target.textContent = '源码';
+          ev.target.textContent = T('源码', 'Source');
         }
       });
     }
@@ -3166,12 +3176,12 @@ async function viewBlob(o, r, ref, path) {
       if (box.dataset.preview === '1') {
         box.innerHTML = codeBody;
         box.dataset.preview = '0';
-        ev.target.textContent = '预览';
+        ev.target.textContent = T('预览', 'Preview');
       } else {
         box.innerHTML = body;
         box.dataset.preview = '1';
         bindTr();
-        ev.target.textContent = '源码';
+        ev.target.textContent = T('源码', 'Source');
       }
     });
   }
@@ -3376,11 +3386,11 @@ async function viewIssues(o, r, kind, params) {
   const pager = (page > 1 || hasNext) ? '<div class="pager">' +
     (page > 1
       ? '<a class="btn sm" href="' + mk({ page: page > 2 ? String(page - 1) : '' }) + '">上一页</a>'
-      : '<span class="btn sm ghost disabled">上一页</span>') +
-    '<span class="dim">第 ' + page + ' 页</span>' +
+      : '<span class="btn sm ghost disabled">' + T('上一页', 'Prev') + '</span') +
+    '<span class="dim">' + T('第 ' + page + ' 页', 'Page ' + page) + '</span>' +
     (hasNext
-      ? '<a class="btn sm" href="' + mk({ page: String(page + 1) }) + '">下一页</a>'
-      : '<span class="btn sm ghost disabled">下一页</span>') +
+      ? '<a class="btn sm" href="' + mk({ page: String(page + 1) }) + '">' + T('下一页', 'Next') + '</a'
+      : '<span class="btn sm ghost disabled">' + T('下一页', 'Next') + '</span') +
     '</div>' : '';
 
   const sortSel = '<label class="filt"><span>排序</span><select id="i-sort">' +
@@ -3632,11 +3642,11 @@ async function viewCommits(o, r, ref, page) {
   const pager = (page > 1 || hasNext) ? '<div class="pager">' +
     (page > 1
       ? '<a class="btn sm" href="' + mk(page - 1) + '">上一页</a>'
-      : '<span class="btn sm ghost disabled">上一页</span>') +
-    '<span class="dim">第 ' + page + ' 页</span>' +
+      : '<span class="btn sm ghost disabled">' + T('上一页', 'Prev') + '</span') +
+    '<span class="dim">' + T('第 ' + page + ' 页', 'Page ' + page) + '</span>' +
     (hasNext
-      ? '<a class="btn sm" href="' + mk(page + 1) + '">下一页</a>'
-      : '<span class="btn sm ghost disabled">下一页</span>') +
+      ? '<a class="btn sm" href="' + mk(page + 1) + '">' + T('下一页', 'Next') + '</a'
+      : '<span class="btn sm ghost disabled">' + T('下一页', 'Next') + '</span') +
     '</div>' : '';
 
   app.innerHTML = repoHeader(repo, 'commits') + `
@@ -3747,18 +3757,18 @@ async function viewUser(login) {
         ${u.bio ? `<div class="p-bio">${esc(u.bio)}</div>` : ''}
         <div class="p-stats">
           <span><b>${fmtNum(u.public_repos)}</b> 仓库</span>
-          <span><b>${fmtNum(u.followers)}</b> 关注者</span>
+          <span><b>${fmtNum(u.followers)}</b> ${T('关注者', 'followers')}</span>
           <span><b>${fmtNum(u.following)}</b> 正在关注</span>
           ${u.location ? `<span>${esc(u.location)}</span>` : ''}
           ${u.blog ? `<span>${ICON.link}<a href="${esc(u.blog)}" target="_blank" rel="noopener">${esc(u.blog)}</a></span>` : ''}
           <span>加入于 ${fmtDate(u.created_at)}</span>
         </div>
         ${srcLink('https://github.com/' + encodeURIComponent(u.login))}
-        ${isMe && canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">新建仓库</button></div>' : ''}
+        ${isMe && canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">' + T('新建仓库', 'New repository') + '</button></div>' : ''}
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head">${isMe ? '我的仓库' : '公开仓库'} · ${repos.length}</div>
+      <div class="panel-head">${isMe ? T('我的仓库', 'My repos') : T('公开仓库', 'Public repos')} · ${repos.length}</div>
       ${repos.length ? repos.map(repoCard).join('') : '<div class="empty">' + (isMe ? '没有仓库' : '没有公开仓库') + '</div>'}
     </div>`;
 
@@ -3946,13 +3956,13 @@ function searchPager(params, page, total) {
   };
   const prev = page > 1
     ? '<a class="btn sm" href="' + mk(page - 1) + '">上一页</a>'
-    : '<span class="btn sm ghost disabled">上一页</span>';
+    : '<span class="btn sm ghost disabled">' + T('上一页', 'Prev') + '</span';
   const next = page < maxPage
-    ? '<a class="btn sm" href="' + mk(page + 1) + '">下一页</a>'
-    : '<span class="btn sm ghost disabled">下一页</span>';
+    ? '<a class="btn sm" href="' + mk(page + 1) + '">' + T('下一页', 'Next') + '</a'
+    : '<span class="btn sm ghost disabled">' + T('下一页', 'Next') + '</span';
 
   return '<div class="pager">' + prev +
-    '<span class="dim">第 ' + page + ' / ' + maxPage + ' 页</span>' + next + '</div>';
+    '<span class="dim">' + T('第 ' + page + ' / ' + maxPage + ' 页', 'Page ' + page + ' / ' + maxPage) + '</span>' + next + '</div>';
 }
 
 async function viewSearch(q, type, params) {
@@ -3992,7 +4002,7 @@ async function viewSearch(q, type, params) {
 
   // 结果头：总数 + 超限说明（GitHub 检索硬性只返回前 1000 条）
   const head = (unit) => '<div class="panel-head">' + fmtNum(total) + ' ' + unit +
-    (total > 1000 ? '<span class="dim cap-note">GitHub 限制：仅返回前 1000 条，可加筛选缩小范围</span>' : '') +
+    (total > 1000 ? '<span class="dim cap-note">' + T('GitHub 限制：仅返回前 1000 条，可加筛选缩小范围', 'GitHub caps search at the first 1000 results; narrow with filters.') + '</span>' : '') +
     '</div>';
 
   // 空结果的智能建议：按有无筛选与多词关键词给出可执行的重搜动作
@@ -4004,21 +4014,23 @@ async function viewSearch(q, type, params) {
       const np = new URLSearchParams();
       np.set('q', q);
       np.set('type', type);
-      acts.push({ label: '清除筛选重搜', hash: '#/search?' + np.toString(), primary: true });
+      acts.push({ label: T('清除筛选重搜', 'Retry without filters'), hash: '#/search?' + np.toString(), primary: true });
     }
     const words = q.trim().split(/\s+/).filter((t) => t.indexOf(':') < 0);
     if (words.length > 1) {
       const np = new URLSearchParams();
       np.set('q', words[0]);
       np.set('type', type);
-      acts.push({ label: '只搜“' + words[0] + '”', hash: '#/search?' + np.toString() });
+      acts.push({ label: T('只搜“' + words[0] + '”', 'Search only "' + words[0] + '"'), hash: '#/search?' + np.toString() });
     }
     if (!acts.length) {
-      return '<div class="empty search-empty"><div>没有结果。换个更短的关键词，或检查拼写；' +
-        '也可以在筛选栏减少条件。</div></div>';
+      return '<div class="empty search-empty"><div>' +
+        T('没有结果。换个更短的关键词，或检查拼写；也可以在筛选栏减少条件。',
+          'No results. Try a shorter keyword, check the spelling, or loosen the filters.') + '</div></div>';
     }
-    return '<div class="empty search-empty"><div>没有结果：' +
-      (hasFilter ? '可能是筛选条件过严，或关键词与筛选不匹配。' : '试试下面的建议。') + '</div>' +
+    return '<div class="empty search-empty"><div>' + T('没有结果：', 'No results: ') +
+      (hasFilter ? T('可能是筛选条件过严，或关键词与筛选不匹配。', 'the filters may be too strict, or do not match the keywords.')
+                 : T('试试下面的建议。', 'try the suggestions below.')) + '</div>' +
       '<div class="se-acts">' + acts.map((a) =>
         '<button type="button" class="btn sm ' + (a.primary ? '' : 'ghost') +
         '" data-seact="' + esc(a.hash) + '">' + esc(a.label) + '</button>').join('') +
@@ -4032,7 +4044,7 @@ async function viewSearch(q, type, params) {
         { accept: 'application/vnd.github.text-match+json' });
       total = res.total_count;
       const terms = searchTerms(q);
-      body = '<div class="panel">' + head('个文件') +
+      body = '<div class="panel">' + head(T('个文件', 'files')) +
         (res.items.map((it) => {
           const parts = it.repository.full_name.split('/');
           const frag = (it.text_matches || [])[0];
@@ -4047,7 +4059,7 @@ async function viewSearch(q, type, params) {
     } else if (type === 'users') {
       const res = await gh('/search/users' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel">' + head('个用户') +
+      body = '<div class="panel">' + head(T('个用户', 'users')) +
         (res.items.map((u) => '<div class="file-row" data-href="#/u/' + encodeURIComponent(u.login) + '">' +
           avatar(u.avatar_url, 26) +
           '<span class="fname-wrap"><span class="fname">' + esc(u.login) + '</span></span>' +
@@ -4056,7 +4068,7 @@ async function viewSearch(q, type, params) {
     } else if (type === 'issues') {
       const res = await gh('/search/issues' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel">' + head('个议题') +
+      body = '<div class="panel">' + head(T('个议题', 'issues')) +
         (res.items.map((it) => {
           const fo = it.repository_url.split('/').slice(-2);
           return '<div class="file-row" data-href="' +
@@ -4070,7 +4082,7 @@ async function viewSearch(q, type, params) {
     } else {
       const res = await gh('/search/repositories' + qs + sortQs);
       total = res.total_count;
-      body = '<div class="panel">' + head('个仓库') +
+      body = '<div class="panel">' + head(T('个仓库', 'repos')) +
         (res.items.map(repoCard).join('') || emptyHelp()) + '</div>';
     }
   } catch (e) {
@@ -4091,8 +4103,8 @@ async function viewSearch(q, type, params) {
   }).join('') + '</div>';
 
   app.innerHTML =
-    '<h2 class="page-title">“' + esc(q) + '” 的搜索结果</h2>' +
-    '<div class="search-summary dim">实际检索：<code>' + esc(query) + '</code></div>' +
+    '<h2 class="page-title">' + T('“' + esc(q) + '” 的搜索结果', 'Results for "' + esc(q) + '"') + '</h2>' +
+    '<div class="search-summary dim">' + T('实际检索：', 'Query sent: ') + '<code>' + esc(query) + '</code></div>' +
     tabHtml + searchFilterBar(type, f) + body + searchPager(params, page, total);
 
   bindFileRows();
@@ -4179,8 +4191,8 @@ async function viewMe() {
 
   // 本地收藏：过滤与移除只重绘 #favList，不重新请求页面其余数据
   const favItemsHtml = (items, allCount) => {
-    if (!allCount) return '<div class="empty">还没有本地收藏。仓库页点「☆ 本地收藏」即可加入，仅存本机。</div>';
-    if (!items.length) return '<div class="empty">没有匹配的收藏。</div>';
+    if (!allCount) return '<div class="empty">' + T('还没有本地收藏。仓库页点「☆ 本地收藏」即可加入，仅存本机。', 'No favorites yet. Tap ☆ on a repo page to add one; stored locally only.') + '</div>';
+    if (!items.length) return '<div class="empty">' + T('没有匹配的收藏。', 'No matching favorites.') + '</div>';
     return items.map((f) => `<div class="file-row" data-href="${link(f.o, f.r)}">
         ${ICON.folder}
         <span class="fname-wrap">
@@ -4188,16 +4200,16 @@ async function viewMe() {
           ${f.desc ? `<span class="fmsg">${esc(f.desc)}</span>` : ''}
         </span>
         <span class="fsize">${f.lang ? esc(f.lang) : ''}</span>
-        <button type="button" class="btn sm ghost" data-fav-rm-o="${esc(f.o)}" data-fav-rm-r="${esc(f.r)}">移除</button>
+        <button type="button" class="btn sm ghost" data-fav-rm-o="${esc(f.o)}" data-fav-rm-r="${esc(f.r)}">${T('移除', 'Remove')}</button>
       </div>`).join('');
   };
 
   const favPanel = (has) => `<div class="panel">
-      <div class="panel-head">本地收藏 · <span id="favCount">0</span>
+      <div class="panel-head">${T('本地收藏', 'Favorites')} · <span id="favCount">0</span>
         <span class="spacer"></span>
-        <span class="dim" style="font-size:11.5px">仅本机可见，不写 GitHub</span>
+        <span class="dim" style="font-size:11.5px">${T('仅本机可见，不写 GitHub', 'Local only, never written to GitHub')}</span>
       </div>
-      ${has ? '<div class="fav-search"><input id="favSearch" type="search" enterkeyhint="search" autocomplete="off" placeholder="按名称、描述或语言过滤"></div>' : ''}
+      ${has ? '<div class="fav-search"><input id="favSearch" type="search" enterkeyhint="search" autocomplete="off" placeholder=\'' + T('按名称、描述或语言过滤', 'Filter by name, description or language') + '\'></div>' : ''}
       <div id="favList"></div>
     </div>`;
 
@@ -4241,11 +4253,11 @@ async function viewMe() {
       gh('/user/repos?sort=pushed&per_page=100&affiliation=owner,collaborator,organization_member'),
       gh('/user/starred?per_page=40').catch(() => [])
     ]);
-    document.title = u.login + ' · 我的';
+    document.title = u.login + ' · ' + T('我的', 'Me');
     // 三个面板共用同一套本地过滤：收藏由 updateFav 处理（含移除），仓库与 Star 走 wireFilter
     const matchRepo = (r) => r.full_name + ' ' + (r.description || '') + ' ' + (r.language || '');
     const filterBar = (id) => '<div class="fav-search"><input id="' + id +
-      '" type="search" enterkeyhint="search" autocomplete="off" placeholder="按名称、描述或语言过滤"></div>';
+      '" type="search" enterkeyhint="search" autocomplete="off" placeholder=\'' + T('按名称、描述或语言过滤', 'Filter by name, description or language') + '\'></div>';
     app.innerHTML = `
       <div class="profile">
         ${avatar(u.avatar_url, 72)}
@@ -4253,30 +4265,30 @@ async function viewMe() {
           <h1>${esc(u.name || u.login)}</h1>
           <div class="login">${esc(u.login)}</div>
           <div class="p-stats">
-            <span><b>${fmtNum(u.public_repos)}</b> 公开仓库</span>
-            <span><b>${fmtNum(u.followers)}</b> 关注者</span>
-            <a href="#/u/${encodeURIComponent(u.login)}">公开主页 →</a>
+            <span><b>${fmtNum(u.public_repos)}</b> ${T('公开仓库', 'public repos')}</span>
+            <span><b>${fmtNum(u.followers)}</b> ${T('关注者', 'followers')}</span>
+            <a href="#/u/${encodeURIComponent(u.login)}">' + T('公开主页 →', 'Public profile →') + '</a>
           </div>
-          ${canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">新建仓库</button></div>' : ''}
+          ${canWrite() ? '<div class="repo-actions"><button type="button" class="btn primary" id="newRepo">' + T('新建仓库', 'New repository') + '</button></div>' : ''}
         </div>
       </div>
       ${favPanel(favList().length > 0)}
       <div class="panel">
-        <div class="panel-head">我的仓库 · <span id="ownCount">${repos.length}</span></div>
+        <div class="panel-head">${T('我的仓库', 'My repos')} · <span id="ownCount">${repos.length}</span></div>
         ${repos.length ? filterBar('ownSearch') : ''}
         <div id="ownList"></div>
       </div>
       <div class="panel">
-        <div class="panel-head">已 Star · <span id="starCount">${starred.length}</span>
+        <div class="panel-head">${T('已 Star', 'Starred')} · <span id="starCount">${starred.length}</span>
           <span class="spacer"></span>
-          <span class="dim" style="font-size:11.5px">公开可见</span>
+          <span class="dim" style="font-size:11.5px">${T('公开可见', 'Publicly visible')}</span>
         </div>
         ${starred.length ? filterBar('starSearch') : ''}
         <div id="starList"></div>
       </div>`;
     bindFav();
-    wireFilter('#ownSearch', '#ownList', '#ownCount', repos, repoCard, matchRepo, '<div class="empty">没有仓库</div>');
-    wireFilter('#starSearch', '#starList', '#starCount', starred, repoCard, matchRepo, '<div class="empty">还没有 Star</div>');
+    wireFilter('#ownSearch', '#ownList', '#ownCount', repos, repoCard, matchRepo, '<div class="empty">' + T('没有仓库', 'No repositories') + '</div>');
+    wireFilter('#starSearch', '#starList', '#starCount', starred, repoCard, matchRepo, '<div class="empty">' + T('还没有 Star', 'Nothing starred yet') + '</div>');
     const nr = $('#newRepo');
     if (nr) nr.addEventListener('click', openNewRepoDialog);
   } catch (e) {
@@ -4572,10 +4584,23 @@ async function openSettings(section) {
 
   mask.innerHTML = `
     <div class="modal-card">
-      <h3>连接设置</h3>
+      <h3>${T('连接设置', 'Settings')}</h3>
 
       <div class="set-block">
-        <h4>访问令牌</h4>
+        <h4>${T('界面语言', 'UI language')}</h4>
+        <label class="filt" style="margin-bottom:0">
+          <span>Language</span>
+          <select id="uiLang">
+            <option value="zh" ${LS.get('ghl_lang', 'zh') !== 'en' ? 'selected' : ''}>${T('中文（默认）', '中文（默认）')}</option>
+            <option value="en" ${LS.get('ghl_lang', 'zh') === 'en' ? 'selected' : ''}>English</option>
+          </select>
+        </label>
+        <p class="hint" style="margin:6px 0 0">${T('切换后立即重载页面。英文界面覆盖主框架与高频文本，长提示暂以中文显示并逐步补齐。',
+          'Reloads the page immediately. English covers the main UI; long hints stay Chinese for now and are being translated gradually.')}</p>
+      </div>
+
+      <div class="set-block">
+        <h4>${T('访问令牌', 'Access token')}</h4>
         <p class="hint">
           匿名调用每小时 60 次，浏览几个仓库就会耗尽；填入令牌后为 5000 次。
           令牌存在浏览器本地，随请求直接发给 GitHub。
@@ -4782,6 +4807,12 @@ async function openSettings(section) {
   const close = () => { mask.hidden = true; mask.innerHTML = ''; };
   $('#tkCancel').addEventListener('click', close);
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+
+  const uiLang = $('#uiLang');
+  if (uiLang) uiLang.addEventListener('change', () => {
+    LS.set('ghl_lang', uiLang.value);
+    location.reload();   // 全部界面文本按新语言重渲染，最简单也最可靠
+  });
 
   const refreshCacheInfo = () => {
     const el = $('#cacheInfo');
@@ -6060,7 +6091,8 @@ async function deleteRelease(o, r, id, name, btn) {
 /* ---------------------------- 搜索面板 ---------------------------- */
 
 const SEARCH_TYPES = [
-  ['repositories', '仓库'], ['code', '代码'], ['users', '用户'], ['issues', '议题']
+  ['repositories', T('仓库', 'Repos')], ['code', T('代码', 'Code')],
+  ['users', T('用户', 'Users')], ['issues', T('议题', 'Issues')]
 ];
 
 function emptyFilters() {
@@ -6174,10 +6206,11 @@ function histItemHtml(it, editable) {
 
 function histPanelHtml() {
   const list = histList();
-  if (!list.length) return '<div class="hist-head"><span>搜索历史</span></div>' +
-    '<div class="hist-empty">还没有记录。搜索过一次后，这里可以重跑、改名或删除。</div>';
-  return '<div class="hist-head"><span>搜索历史</span><span class="spacer"></span>' +
-    '<button type="button" class="btn sm ghost" data-hclear>清空</button></div>' +
+  if (!list.length) return '<div class="hist-head"><span>' + T('搜索历史', 'Search history') + '</span></div>' +
+    '<div class="hist-empty">' + T('还没有记录。搜索过一次后，这里可以重跑、改名或删除。',
+      'No history yet. After a search you can rerun, rename or remove entries here.') + '</div>';
+  return '<div class="hist-head"><span>' + T('搜索历史', 'Search history') + '</span><span class="spacer"></span>' +
+    '<button type="button" class="btn sm ghost" data-hclear>' + T('清空', 'Clear') + '</button></div>' +
     list.map((it) => histItemHtml(it, true)).join('');
 }
 
@@ -6378,7 +6411,7 @@ function openSearchPanel(opts) {
           '<svg viewBox="0 0 16 16" width="17" height="17" class="sp-ico">' +
             '<path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.5 4.5 0 1 0-8.999 0 4.5 4.5 0 0 0 8.999 0Z"/>' +
           '</svg>' +
-          '<input id="sp-q" type="text" placeholder="输入关键词，或粘贴 GitHub 链接" value="' +
+          '<input id="sp-q" type="text" placeholder="' + T('输入关键词，或粘贴 GitHub 链接', 'Keywords, or paste a GitHub link') + '" value="' +
             esc(st.q) + '" autocomplete="off" spellcheck="false">' +
         '</div>' +
         '<div class="sp-types">' +
@@ -6393,15 +6426,15 @@ function openSearchPanel(opts) {
              ['in:readme', '含 README'], ['fork:false', '不含 fork'], ['archived:false', '排除归档']
             ].map(([tok, label]) =>
               '<button type="button" class="sp-chip" data-tok="' + esc(tok) + '">' + esc(label) + '</button>').join('') +
-            '<span class="dim sp-syntax-tip">点击追加到关键词</span></div>'
+            '<span class="dim sp-syntax-tip">' + T('点击追加到关键词', 'Click to append') + '</span></div>'
           : '') +
         '<div class="sp-preview" id="sp-preview"></div>' +
         '<div class="sp-suggest" id="sp-suggest"></div>' +
         '<div class="sp-hist" id="sp-hist">' + histPanelHtml() + '</div>' +
         '<div class="sp-actions">' +
-          '<span class="sp-hint">Enter 搜索　Esc 关闭</span>' +
+          '<span class="sp-hint">' + T('Enter 搜索　Esc 关闭', 'Enter to search · Esc to close') + '</span>' +
           '<span class="spacer"></span>' +
-          '<button type="button" class="btn primary" id="sp-go">搜索</button>' +
+          '<button type="button" class="btn primary" id="sp-go">' + T('搜索', 'Search') + '</button>' +
         '</div>' +
       '</div>';
 
@@ -6517,6 +6550,14 @@ function setupTheme() {
 window.addEventListener('hashchange', route);
 
 document.addEventListener('DOMContentLoaded', () => {
+  // 顶栏静态文本按当前界面语言替换
+  const navTools = document.querySelector('.topnav a[data-nav="tools"]');
+  const navMe = document.querySelector('.topnav a[data-nav="me"]');
+  if (navTools) navTools.textContent = T('通路', 'Routes');
+  if (navMe) navMe.textContent = T('我的', 'Me');
+  const qBtn = $('#q');
+  if (qBtn) qBtn.setAttribute('title', T('搜索', 'Search'));
+
   setupSearch();
   setupTheme();
   updateAuthBadge();
