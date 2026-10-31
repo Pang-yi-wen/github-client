@@ -2966,7 +2966,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.38';
+const APP_VERSION = '1.0.39';
 'use strict';
 
 /* ============================================================
@@ -4235,17 +4235,18 @@ function notifGrouped(items) {
 }
 
 async function viewNotifications() {
-  document.title = '通知 · GitHub 本地客户端';
+  document.title = T('通知', 'Notifications') + ' · ' + T('GitHub 本地客户端', 'GitHub Client');
 
   if (!TOKEN) {
     app.innerHTML = `<div class="panel">
-      <div class="panel-head">通知</div>
+      <div class="panel-head">${T('通知', 'Notifications')}</div>
       <div class="empty-state">
-        <h3>需要访问令牌</h3>
-        <p class="hint">通知是账号级数据，只有带上令牌才能读取。令牌需包含 <code>notifications</code> 作用域。</p>
+        <h3>${T('需要访问令牌', 'Access token required')}</h3>
+        <p class="hint">${T('通知是账号级数据，只有带上令牌才能读取。令牌需包含 <code>notifications</code> 作用域。',
+          'Notifications are account data; a token is required to read them, with the <code>notifications</code> scope.')}</p>
         <div class="empty-actions">
-          <button class="btn primary" id="nfToken">去设置令牌</button>
-          <a class="btn" href="#/">回首页</a>
+          <button class="btn primary" id="nfToken">${T('去设置令牌', 'Set token')}</button>
+          <a class="btn" href="#/">${T('回首页', 'Home')}</a>
         </div>
       </div>
     </div>`;
@@ -4258,28 +4259,29 @@ async function viewNotifications() {
   const items = await notifRefresh({ silent: true });
   const last = Number(LS.get(NOTIF_LAST_KEY, '0') || 0);
   const status = notifState.err
-    ? '<span style="color:var(--red)">读取失败：' + esc(notifState.err) + '</span>'
-    : '上次检查 ' + (last ? new Date(last).toLocaleTimeString('zh-CN') : '—') +
-      ' · 每 ' + Math.round(notifIntervalMs() / 60000) + ' 分钟自动检查';
+    ? '<span style="color:var(--red)">' + T('读取失败：', 'Failed to read: ') + esc(notifState.err) + '</span>'
+    : T('上次检查 ', 'Last check ') + (last ? new Date(last).toLocaleTimeString('zh-CN') : '—') +
+      ' · ' + T('每 ', 'every ') + Math.round(notifIntervalMs() / 60000) + T(' 分钟自动检查', ' min auto check');
 
   let scopeWarn = '';
   if (items && !items.length) {
     const ok = await notifScopeOk();
     if (ok === false) {
       scopeWarn = '<p class="hint" style="color:var(--yellow);margin:0 0 12px">' +
-        '当前令牌没有 <code>notifications</code> 作用域，接口会返回空列表。' +
-        '换一个带该作用域的令牌后才能收到提醒。</p>';
+        T('当前令牌没有 <code>notifications</code> 作用域，接口会返回空列表。换一个带该作用域的令牌后才能收到提醒。',
+          'The current token lacks the <code>notifications</code> scope, so the API returns an empty list. Use a token with that scope to receive alerts.') +
+        '</p>';
     }
   }
 
   const groups = notifGrouped(items || []);
   app.innerHTML = `
     <div class="notif-head">
-      <h2>通知${notifState.unread ? '（' + notifState.unread + ' 条未读）' : ''}</h2>
+      <h2>${T('通知', 'Notifications')}${notifState.unread ? T('（' + notifState.unread + ' 条未读）', ' (' + notifState.unread + ' unread)') : ''}</h2>
       <span class="spacer" style="flex:1"></span>
-      <button class="btn sm ghost" id="nfRefresh">刷新</button>
-      <button class="btn sm" id="nfAllRead" ${notifState.unread ? '' : 'disabled'}>全部标为已读</button>
-      <button class="btn sm ghost" id="nfSet">设置</button>
+      <button class="btn sm ghost" id="nfRefresh">${T('刷新', 'Refresh')}</button>
+      <button class="btn sm" id="nfAllRead" ${notifState.unread ? '' : 'disabled'}>${T('全部标为已读', 'Mark all read')}</button>
+      <button class="btn sm ghost" id="nfSet">${T('设置', 'Settings')}</button>
     </div>
     <div class="notif-sub">${status}</div>
     ${scopeWarn}
@@ -4288,7 +4290,7 @@ async function viewNotifications() {
         <div class="notif-ghead">
           <a href="${link(g.full.split('/')[0], g.full.split('/')[1])}">${esc(g.full)}</a>
           <span class="spacer"></span>
-          <button class="btn sm ghost notif-mark" data-repo="${esc(g.full)}">该仓库标为已读</button>
+          <button class="btn sm ghost notif-mark" data-repo="${esc(g.full)}">${T('该仓库标为已读', 'Mark repo read')}</button>
         </div>
         ${g.items.map((it) => `
           <div class="notif-item unread" data-id="${esc(it.id)}">
@@ -4297,15 +4299,15 @@ async function viewNotifications() {
               <div class="notif-title">${esc(notifItemTitle(it))}</div>
               <div class="notif-meta">
                 ${notifIcon(it.subject && it.subject.type)}
-                <span>${esc((it.subject && it.subject.type) || '通知')}</span>
+                <span>${esc((it.subject && it.subject.type) || T('通知', 'notification'))}</span>
                 <span class="notif-reason">${esc(notifReasonLabel(it.reason))}</span>
                 <span>${esc(timeAgo(it.updated_at))}</span>
               </div>
             </span>
-            <button class="btn sm ghost notif-mark" data-mark="${esc(it.id)}">已读</button>
+            <button class="btn sm ghost notif-mark" data-mark="${esc(it.id)}">${T('已读', 'Read')}</button>
           </div>`).join('')}
       </div>`).join('')
-    : '<div class="empty">' + (notifState.err ? esc(notifState.err) : '没有未读通知') + '</div>'}`;
+    : '<div class="empty">' + (notifState.err ? esc(notifState.err) : T('没有未读通知', 'No unread notifications')) + '</div>'}`;
 
   bindNotifPage();
 }
@@ -4917,21 +4919,24 @@ let guideOpen = false;
 
 const GUIDE = [
   {
-    t: '设置访问令牌',
-    d: '令牌决定配额与权限。只读公开内容勾 public_repo；看私有仓库加 repo；收通知提醒加 notifications；改账号资料加 user。令牌只保存在本机，请求时直接发给 GitHub。',
-    btn: '去设置令牌',
+    t: () => T('设置访问令牌', 'Set an access token'),
+    d: () => T('令牌决定配额与权限。只读公开内容勾 public_repo；看私有仓库加 repo；收通知提醒加 notifications；改账号资料加 user。令牌只保存在本机，请求时直接发给 GitHub。',
+      'The token sets quota and permissions. Public-only: check public_repo; private repos add repo; notifications add notifications; profile updates add user. It stays in this browser and is sent directly to GitHub.'),
+    btn: () => T('去设置令牌', 'Set token'),
     act: (close) => { close(); openSettings(); }
   },
   {
-    t: '打开一个仓库',
-    d: '仓库页可以查看文件、提交、Issues 与 Releases。先用一个公开仓库熟悉结构，左侧文件树可以直接进入子目录。',
-    btn: '打开 microsoft/vscode',
+    t: () => T('打开一个仓库', 'Open a repository'),
+    d: () => T('仓库页可以查看文件、提交、Issues 与 Releases。先用一个公开仓库熟悉结构，左侧文件树可以直接进入子目录。',
+      'A repo page shows files, commits, issues and releases. Try a public repo first; the file tree on the left drills into subdirectories.'),
+    btn: () => T('打开 microsoft/vscode', 'Open microsoft/vscode'),
     act: (close) => { close(); location.hash = link('microsoft', 'vscode'); }
   },
   {
-    t: '搜索与下载',
-    d: '顶部搜索支持类型与条件组合；「通路与下载」里可以下载单个文件，并查看下载位置与下载记录。',
-    btn: '打开搜索',
+    t: () => T('搜索与下载', 'Search and download'),
+    d: () => T('顶部搜索支持类型与条件组合；「通路与下载」里可以下载单个文件，并查看下载位置与下载记录。',
+      'The top search combines type and filters; "Routes & Downloads" downloads single files and keeps a download history.'),
+    btn: () => T('打开搜索', 'Open search'),
     act: (close) => { close(); openSearchPanel({ q: '' }); }
   }
 ];
@@ -4947,16 +4952,16 @@ function openGuide(step) {
   mask.innerHTML = `
     <div class="modal-card">
       <div class="guide-dots">${GUIDE.map((_, i) => `<span class="${i === step ? 'on' : ''}"></span>`).join('')}</div>
-      <h3>${step + 1}. ${esc(g.t)}</h3>
-      <p class="hint">${esc(g.d)}</p>
+      <h3>${step + 1}. ${esc(g.t())}</h3>
+      <p class="hint">${esc(g.d())}</p>
       <div class="modal-actions">
-        <button class="btn ghost sm" id="gdSkip">跳过</button>
+        <button class="btn ghost sm" id="gdSkip">${T('跳过', 'Skip')}</button>
         <span class="spacer"></span>
-        ${step > 0 ? '<button class="btn sm ghost" id="gdPrev">上一步</button>' : ''}
+        ${step > 0 ? '<button class="btn sm ghost" id="gdPrev">' + T('上一步', 'Back') + '</button>' : ''}
         ${step < GUIDE.length - 1
-          ? '<button class="btn sm" id="gdNext">下一步</button>'
-          : '<button class="btn sm ghost" id="gdDone">完成</button>'}
-        <button class="btn primary sm" id="gdAct">${esc(g.btn)}</button>
+          ? '<button class="btn sm" id="gdNext">' + T('下一步', 'Next') + '</button>'
+          : '<button class="btn sm ghost" id="gdDone">' + T('完成', 'Done') + '</button>'}
+        <button class="btn primary sm" id="gdAct">${esc(g.btn())}</button>
       </div>
     </div>`;
   const close = () => {
@@ -7577,62 +7582,57 @@ async function openSettings(section) {
       <div class="set-block">
         <h4>${T('访问令牌', 'Access token')}</h4>
         <p class="hint">
-          匿名调用每小时 60 次，浏览几个仓库就会耗尽；填入令牌后为 5000 次。
-          令牌存在浏览器本地，随请求直接发给 GitHub。
+          ${T('匿名调用每小时 60 次，浏览几个仓库就会耗尽；填入令牌后为 5000 次。 令牌存在浏览器本地，随请求直接发给 GitHub。', 'Anonymous access is 60 requests/hour (a few repo visits will use it up); a token raises it to 5000. The token stays in this browser and is sent directly to GitHub.')}
         </p>
         <div class="scope-pick">
-          <label class="form-check"><input type="checkbox" id="scPriv" ${LS.get('ghl_sc_priv', '0') === '1' ? 'checked' : ''}> <span>读取私有仓库 <code>repo</code></span></label>
-          <label class="form-check"><input type="checkbox" id="scUser" ${LS.get('ghl_sc_user', '0') === '1' ? 'checked' : ''}> <span>修改账号资料 <code>user</code></span></label>
-          <label class="form-check"><input type="checkbox" id="scNotif" ${LS.get('ghl_sc_notif', '1') === '0' ? '' : 'checked'}> <span>读取通知提醒 <code>notifications</code></span></label>
+          <label class="form-check"><input type="checkbox" id="scPriv" ${LS.get('ghl_sc_priv', '0') === '1' ? 'checked' : ''}> <span>${T('读取私有仓库 <code>repo</code>', 'Read private repos <code>repo</code>')}</span></label>
+          <label class="form-check"><input type="checkbox" id="scUser" ${LS.get('ghl_sc_user', '0') === '1' ? 'checked' : ''}> <span>${T('修改账号资料 <code>user</code>', 'Update profile <code>user</code>')}</span></label>
+          <label class="form-check"><input type="checkbox" id="scNotif" ${LS.get('ghl_sc_notif', '1') === '0' ? '' : 'checked'}> <span>${T('读取通知提醒 <code>notifications</code>', 'Read notifications <code>notifications</code>')}</span></label>
         </div>
         <div id="scopeHint" class="dim" style="font-size:11.5px;margin:-2px 0 8px"></div>
         <div class="tk-links">
           <a class="btn sm" id="tkGen"
              href="https://github.com/settings/tokens/new?scopes=public_repo&description=GitHub%20Web%20Client"
-             target="_blank" rel="noopener">去 GitHub 生成令牌 ↗</a>
-          <button class="btn sm ghost" id="tkCmd" title="复制 gh 命令">复制 gh 命令</button>
+             target="_blank" rel="noopener">${T('去 GitHub 生成令牌 ↗', 'Create token on GitHub ↗')}</a>
+          <button class="btn sm ghost" id="tkCmd" title="${T('复制 gh 命令', 'Copy gh command')}">${T('复制 gh 命令', 'Copy gh command')}</button>
         </div>
         <p class="hint" style="font-size:11.5px;margin-top:8px">
-          勾选上面的用途后点「去 GitHub 生成令牌」，链接会自动带上对应作用域。
-          若链接打不开，说明 github.com 在当前网络不可达；装了 gh CLI 的话，在终端跑 <code>gh auth token</code> 可直接取出已有令牌。
+          ${T('勾选上面的用途后点「去 GitHub 生成令牌」，链接会自动带上对应作用域。 若链接打不开，说明 github.com 在当前网络不可达；装了 gh CLI 的话，在终端跑 <code>gh auth token</code> 可直接取出已有令牌。', 'Pick the scopes above, then use "Create token on GitHub" - the link carries the matching scopes. If the link fails, github.com is unreachable from this network; with gh CLI installed, run <code>gh auth token</code> in a terminal to get an existing token.')}
         </p>
         <input id="tk" type="password" placeholder="ghp_… 或 github_pat_…" value="${esc(TOKEN)}" spellcheck="false">
         <div class="modal-actions">
-          <button class="btn ghost sm" id="tkClear">清除</button>
-          <button class="btn ghost sm" id="guideOpen">新手引导</button>
+          <button class="btn ghost sm" id="tkClear"">Clear</button>
+          <button class="btn ghost sm" id="guideOpen">${T('新手引导', 'Onboarding guide')}</button>
           <span class="spacer"></span>
-          <button class="btn primary sm" id="tkSave">保存令牌</button>
+          <button class="btn primary sm" id="tkSave">${T('保存令牌', 'Save token')}</button>
         </div>
         <div id="tkStatus" class="dim" style="font-size:12px;margin-top:8px"></div>
       </div>
 
       <div class="set-block">
-        <h4>账号</h4>
-        <div id="acctBox" class="dim" style="font-size:12px">加载中…</div>
+        <h4>${T('账号', 'Account')}</h4>
+        <div id="acctBox" class="dim" style="font-size:12px">${T('加载中…', 'Loading…')}</div>
       </div>
 
       <div class="set-block">
-        <h4>自建中转 <span class="dim" style="font-weight:400">可选，但最稳</span></h4>
+        <h4>${T('自建中转 <span class="dim" style="font-weight:400">可选，但最稳</span>', 'Self-hosted proxy <span class="dim" style="font-weight:400">optional, most reliable</span>')}</h4>
         <p class="hint">
-          填一个你自己的中转地址，它会排在中转通道的第一位。
-          可以填纯前缀（<code>https://x.workers.dev/</code>），也可以填带 <code>{url}</code> 的模板
-          （<code>https://x.workers.dev/?url={url}</code>）。部署方法见项目里的 worker.js。
+          ${T('填一个你自己的中转地址，它会排在中转通道的第一位。 可以填纯前缀（<code>https://x.workers.dev/</code>），也可以填带 <code>{url}</code> 的模板 （<code>https://x.workers.dev/?url={url}</code>）。部署方法见项目里的 worker.js。', 'Enter your own proxy address; it is tried before any public relay. Either a plain prefix (<code>https://x.workers.dev/</code>) or a template with <code>{url}</code> (<code>https://x.workers.dev/?url={url}</code>). See worker.js in the repo for deployment.')}
         </p>
         <input id="px" type="text" placeholder="https://your-worker.workers.dev/" value="${esc(LS.get('ghl_proxy', ''))}" spellcheck="false">
         <div class="modal-actions">
-          <button class="btn ghost sm" id="pxClear">清除</button>
+          <button class="btn ghost sm" id="pxClear"">Clear</button>
           <span class="spacer"></span>
-          <button class="btn sm" id="pxTest">测试</button>
-          <button class="btn primary sm" id="pxSave">保存</button>
+          <button class="btn sm" id="pxTest"">Test</button>
+          <button class="btn primary sm" id="pxSave"">Save</button>
         </div>
         <div id="pxStatus" class="dim" style="font-size:12px;margin-top:8px"></div>
       </div>
 
       <div class="set-block">
-        <h4>本地缓存</h4>
+        <h4>${T('本地缓存', 'Local cache')}</h4>
         <p class="hint" style="margin-bottom:8px">
-          浏览过的内容留在本机。有效期内再次访问不会请求 GitHub，因此不消耗配额。
-          仓库信息 8 分钟、文件与目录 5 分钟、README 30 分钟、搜索 10 分钟。
+          ${T('浏览过的内容留在本机。有效期内再次访问不会请求 GitHub，因此不消耗配额。仓库信息 8 分钟、文件与目录 5 分钟、README 30 分钟、搜索 10 分钟。', 'Viewed content is cached locally. Within its TTL it is served without hitting GitHub, so no quota is used. Repo info 8 min, files and dirs 5 min, README 30 min, search 10 min.')}
         </p>
         <div class="modal-actions" style="margin-top:0">
           <span class="dim" id="cacheInfo" style="font-size:12px"></span>
@@ -7642,9 +7642,9 @@ async function openSettings(section) {
       </div>
 
       <div class="set-block">
-        <h4>搜索历史</h4>
+        <h4>${T('搜索历史', 'Search history')}</h4>
         <p class="hint" style="margin-bottom:8px">
-          每次检索记一条，含关键词、类型与筛选条件，存在本机。搜索面板里可重跑、改名或删除单条，首页显示最近几条。
+          ${T('每次检索记一条，含关键词、类型与筛选条件，存在本机。搜索面板里可重跑、改名或删除单条，首页显示最近几条。', 'Each search is stored locally with keywords, type and filters. Rerun, rename or delete entries in the search panel; the home page shows the latest few.')}
         </p>
         <div class="modal-actions" style="margin-top:0">
           <span class="dim" id="histInfo" style="font-size:12px"></span>
@@ -7654,26 +7654,24 @@ async function openSettings(section) {
       </div>
 
       <div class="set-block">
-        <h4>写操作</h4>
-        <p class="hint">默认关闭，仅读取。开启后可在仓库页收藏、Fork 与上传文件，并在「我的」页新建仓库。
-           写请求只发给直连或自建通道，不经过公共中转。</p>
+        <h4>${T('写操作', 'Write operations')}</h4>
+        <p class="hint">${T('默认关闭，仅读取。开启后可在仓库页收藏、Fork 与上传文件，并在「我的」页新建仓库。 写请求只发给直连或自建通道，不经过公共中转。', 'Off by default (read-only). When enabled you can star, fork and upload from a repo page, and create repos under "Me". Write requests only go to direct or self-hosted routes, never through public relays.')}</p>
         <label class="form-check">
           <input type="checkbox" id="wrEn" ${writeEnabled() ? 'checked' : ''}>
-          <span>启用写操作（需要带 <code>repo</code> 作用域的令牌）</span>
+          <span>${T('启用写操作（需要带 <code>repo</code> 作用域的令牌）', 'Enable write operations (token needs <code>repo</code> scope)')}</span>
         </label>
       </div>
 
       <div class="set-block">
-        <h4>翻译</h4>
+        ${T('<h4>翻译</h4>', '<h4>Translation</h4>')}
         <p class="hint" style="margin-bottom:10px">
-          大段文字会显示「译成中文」按钮。六个通道按顺序尝试，前一个失败自动换下一个；
-          选定的通道提到最前，其余仍作兜底。
+          ${T('大段文字会显示「译成中文」按钮。六个通道按顺序尝试，前一个失败自动换下一个； 选定的通道提到最前，其余仍作兜底。', 'Long text gets a "Translate" button. Six channels are tried in order, failing over automatically; the preferred channel goes first, the rest stay as fallback.')}
         </p>
 
         <label class="filt" style="margin-bottom:10px">
-          <span>优先使用</span>
+          <span>${T('优先使用', 'Preferred')}</span>
           <select id="trMode">
-            <option value="auto">自动（本地模型优先）</option>
+            <option value="auto">${T('自动（本地模型优先）', 'Auto (local model first)')}</option>
             <option value="browser">浏览器本地模型</option>
             <option value="tencent">腾讯翻译</option>
             <option value="bilibili">B 站 Index-Translate</option>
@@ -7684,51 +7682,49 @@ async function openSettings(section) {
         </label>
 
         <div class="tr-custom">
-          <input id="trlStyle" type="text" placeholder="翻译偏好（可选），如：保留 API 名称英文"
+          <input id="trlStyle" type="text" placeholder="${T('翻译偏好（可选），如：保留 API 名称英文', 'Translation preference (optional), e.g. keep API names in English')}"
                  value="${esc(LS.get('ghl_tr_style', ''))}" spellcheck="false">
           <input id="trl" type="text" placeholder="LibreTranslate 地址，如 https://lt.example.com"
                  value="${esc(LS.get('ghl_translate', ''))}" spellcheck="false">
-          <input id="trlKey" type="text" placeholder="API Key（该服务要求时填写）"
+          <input id="trlKey" type="text" placeholder="${T('API Key（该服务要求时填写）', 'API key (only if the service requires it)')}"
                  value="${esc(LS.get('ghl_translate_key', ''))}" spellcheck="false">
         </div>
 
         <label class="form-check" style="margin:10px 0 0">
           <input type="checkbox" id="trAuto" ${trAutoShow() ? 'checked' : ''}>
-          <span>打开页面时自动显示已缓存过的译文（不主动发起新翻译）</span>
+          <span>${T('打开页面时自动显示已缓存过的译文（不主动发起新翻译）', 'Auto-show cached translations when opened (never starts new requests)')}</span>
         </label>
 
         <div class="modal-actions" style="margin-top:10px">
           <span class="dim" id="trStatus" style="font-size:11.5px"></span>
           <span class="spacer"></span>
-          <button class="btn ghost sm" id="trlClear">恢复自动</button>
-          <button class="btn primary sm" id="trlSave">保存</button>
+          <button class="btn ghost sm" id="trlClear">${T('恢复自动', 'Reset to auto')}</button>
+          <button class="btn primary sm" id="trlSave"">Save</button>
         </div>
       </div>
 
       <div class="set-block" id="set-notify">
-        <h4>通知提醒</h4>
+        <h4>${T('通知提醒', 'Notifications')}</h4>
         <p class="hint" style="margin-bottom:10px">
-          被 @、被回复、被指派或订阅的议题有新动静时，GitHub 会写入一条通知。
-          开启后按下面的间隔检查未读列表，出现新条目时提醒：客户端弹系统通知，网页端弹浏览器通知（需先授权）。
-          顶栏铃铛显示未读数，点开可就地标记已读。令牌需要 <code>notifications</code> 作用域。
+          ${T('被 @、被回复、被指派或订阅的议题有新动静时，GitHub 会写入一条通知。 开启后按下面的间隔检查未读列表，出现新条目时提醒：客户端弹系统通知，网页端弹浏览器通知（需先授权）。 顶栏铃铛显示未读数，点开可就地标记已读。令牌需要 <code>notifications</code> 作用域。', 'When you are @-mentioned, replied to, assigned, or a watched thread changes, GitHub writes a notification. Enabled, the unread list is checked at the interval below and new items raise an alert: system notification in the app, browser notification on the web (grant first). The bell in the top bar shows the unread count; tap to mark read in place. Token needs <code>notifications</code> scope.')}
         </p>
         <label class="form-check" style="margin-bottom:10px">
           <input type="checkbox" id="nfOn" ${notifEnabled() ? 'checked' : ''}>
-          <span>启用通知检查</span>
+          <span>${T('启用通知检查', 'Enable notification checks')}</span>
         </label>
         <label class="filt" style="margin-bottom:10px">
-          <span>检查间隔</span>
+          <span>${T('检查间隔', 'Check interval')}</span>
           <select id="nfMin">
-            <option value="1">1 分钟</option>
-            <option value="3">3 分钟</option>
-            <option value="5">5 分钟</option>
-            <option value="10">10 分钟</option>
-            <option value="30">30 分钟</option>
+            <option value="1">${T('1 分钟', '1 min')}</option>
+            <option value="3">${T('3 分钟', '3 min')}</option>
+            <option value="5">${T('5 分钟', '5 min')}</option>
+            <option value="10">${T('10 分钟', '10 min')}</option>
+            <option value="30">${T('30 分钟', '30 min')}</option>
           </select>
         </label>
         <label class="form-check" style="margin-bottom:10px">
           <input type="checkbox" id="nfSys" ${notifSysEnabled() ? 'checked' : ''}>
-          <span>新通知时弹出系统通知</span>
+          <span>${T('新通知时弹出系统通知', 'Raise a system notification for new items')}</span>
         </label>
         <div class="modal-actions" style="margin-top:0">
           <span class="dim" id="nfStatus" style="font-size:11.5px"></span>
@@ -7739,11 +7735,9 @@ async function openSettings(section) {
       </div>
 
       <div class="set-block">
-        <h4>自动更新</h4>
+        <h4>${T('自动更新', 'Auto update')}</h4>
         <p class="hint" style="margin-bottom:10px">
-          当前版本 <b id="updVer"></b>。每隔最多 6 小时读取一次来源仓库的 <code>VERSION</code> 文件，
-          发现新版本时顶栏显示箭头，点击即更新。http(s) 页面直接热替换；本地 file:// 页面则下载新文件，
-          替换原文件后重新打开。
+          ${T('当前版本 <b id="updVer"></b>。每隔最多 6 小时读取一次来源仓库的 <code>VERSION</code> 文件， 发现新版本时顶栏显示箭头，点击即更新。http(s) 页面直接热替换；本地 file:// 页面则下载新文件， 替换原文件后重新打开。', 'Current version <b id="updVer"></b>. The source repo VERSION file is checked at most every 6 hours; a new version shows an arrow in the top bar, tap to update. http(s) pages hot-swap in place; local file:// pages download the new file, replace the original and reopen.')}
         </p>
         <p class="hint" id="updShellHint" style="display:none;color:var(--yellow);margin:-2px 0 10px"></p>
         <label class="form-check" style="margin-bottom:10px">
@@ -7751,31 +7745,30 @@ async function openSettings(section) {
           <span>启用自动检查（默认开启）</span>
         </label>
         <label class="filt" style="margin-bottom:10px">
-          <span>更新源</span>
-          <input id="updRepo" type="text" placeholder="owner/repo，留空为默认源"
+          <span>${T('更新源', 'Update source')}</span>
+          <input id="updRepo" type="text" placeholder="${T('owner/repo，留空为默认源', 'owner/repo, empty for the default source')}"
                  value="${esc(LS.get('ghl_upd_repo', ''))}" spellcheck="false" style="flex:1">
         </label>
         <div class="modal-actions">
           <span class="dim" id="updStatus" style="font-size:11.5px"></span>
           <span class="spacer"></span>
-          <button class="btn sm ghost" id="apkDl">下载安装包</button>
-          <button class="btn sm" id="updCheck">检查更新</button>
+          <button class="btn sm ghost" id="apkDl">${T('下载安装包', 'Download APK')}</button>
+          <button class="btn sm" id="updCheck">${T('检查更新', 'Check for updates')}</button>
         </div>
       </div>
 
       <div class="set-block">
-        <h4>当前通路</h4>
+        <h4>${T('当前通路', 'Current routes')}</h4>
         ${chRows}
         <div class="modal-actions">
-          <button class="btn sm" id="reprobe2">重新探测</button>
+          <button class="btn sm" id="reprobe2">${T('重新探测', 'Re-probe')}</button>
           <span class="spacer"></span>
-          <button class="btn" id="tkCancel">关闭</button>
+          <button class="btn" id="tkCancel"">Close</button>
         </div>
       </div>
 
       <p class="hint" style="font-size:11.5px;margin-top:14px;margin-bottom:0">
-        直连通道不会把令牌交给第三方；走公共中转时，请求头会经过该中转服务。
-        若在意这一点，请配置自建中转，或只用直连。
+        ${T('直连通道不会把令牌交给第三方；走公共中转时，请求头会经过该中转服务。 若在意这一点，请配置自建中转，或只用直连。', 'Direct routes never hand your token to a third party; public relays do see the request headers. If that matters, set up a self-hosted proxy or use direct only.')}
       </p>
     </div>`;
 
@@ -7793,7 +7786,7 @@ async function openSettings(section) {
     const el = $('#cacheInfo');
     if (el) {
       const n = cacheCount();
-      el.textContent = n ? '已缓存 ' + n + ' 项' : '暂无缓存';
+      el.textContent = n ? (n + ' cached') : T('暂无缓存', 'No cache');
     }
   };
   refreshCacheInfo();
