@@ -24,6 +24,12 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
 };
 
+/* ---------- 界面语言（zh / en）：新加的界面文本两处都写，保持同步 ----------
+   必须定义在所有顶层常量之前：CH_DIRECT 等模块级常量会在此后立即求值 T。 */
+const T = (zh, en) => (LS.get('ghl_lang', 'zh') === 'en' ? en : zh);
+const TR_CH = { tencent: 'Tencent', bilibili: 'Bilibili', pollinations: 'Pollinations',
+  libre: 'LibreTranslate', mymemory: 'MyMemory', browser: 'Built-in model' };
+
 const CH_DIRECT = {
   id: 'direct',
   label: T('直连', 'Direct'),
@@ -101,11 +107,6 @@ function rawSources(o, r, ref, p) {
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
-
-/* ---------- 界面语言（zh / en）：新加的界面文本两处都写，保持同步 ---------- */
-const T = (zh, en) => (LS.get('ghl_lang', 'zh') === 'en' ? en : zh);
-const TR_CH = { tencent: 'Tencent', bilibili: 'Bilibili', pollinations: 'Pollinations',
-  libre: 'LibreTranslate', mymemory: 'MyMemory', browser: 'Built-in model' };
 
 /* ---------------------------- 图标 ---------------------------- */
 
