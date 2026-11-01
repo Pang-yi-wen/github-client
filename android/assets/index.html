@@ -1716,7 +1716,7 @@ button.asset {
   <div class="search-wrap">
     <button id="q" class="search-trigger" type="button" aria-label="打开搜索">
       <svg class="search-ico" viewBox="0 0 16 16" width="15" height="15"><path fill="currentColor" d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.5 4.5 0 1 0-8.999 0 4.5 4.5 0 0 0 8.999 0Z"/></svg>
-      <span class="st-text">搜索，或粘贴 GitHub 链接</span>
+      <span class="st-text" data-zh="搜索，或粘贴 GitHub 链接" data-en="Search, or paste a GitHub link">搜索，或粘贴 GitHub 链接</span>
       <kbd class="st-kbd">/</kbd>
     </button>
   </div>
@@ -1725,7 +1725,7 @@ button.asset {
     <a href="#/tools" data-nav="tools">通路</a>
     <a href="#/me" data-nav="me">我的</a>
     <a href="#/gists" data-nav="gists">Gist</a>
-    <span id="rate" class="rate" title="API 剩余额度">—</span>
+    <span id="rate" class="rate" title="API 剩余额度 / API quota">—</span>
     <button id="ch" class="ch-badge" title="当前通道">—</button>
     <button id="upd" class="upd-badge" title="发现新版本" hidden>↑ 新版本</button>
     <button id="bell" class="bell-btn" title="通知" aria-label="通知" hidden>
@@ -2966,7 +2966,7 @@ return He}()
 ;"object"==typeof exports&&"undefined"!=typeof module&&(module.exports=hljs);
 </script>
 <script>
-const APP_VERSION = '1.0.40';
+const APP_VERSION = '1.0.41';
 'use strict';
 
 /* ============================================================
@@ -2995,11 +2995,11 @@ const LS = {
 
 const CH_DIRECT = {
   id: 'direct',
-  label: '直连',
+  label: T('直连', 'Direct'),
   api: API_HOST,
   raw: RAW_HOST,
   trust: true,
-  note: '官方接口，速度最快，凭据不经过第三方'
+  note: T('官方接口，速度最快，凭据不经过第三方', 'Official API. Fastest; credentials never touch a third party.')
 };
 
 const CH_PUBLIC = [
@@ -3009,7 +3009,7 @@ const CH_PUBLIC = [
     api: 'https://gh-proxy.org/' + API_HOST,
     raw: 'https://gh-proxy.org/' + RAW_HOST,
     trust: false,
-    note: '公共中转，官方新域名；额度由该站共享，可能被用尽'
+    note: T('公共中转，官方新域名；额度由该站共享，可能被用尽', 'Public relay, official new domain. Quota shared site-wide and may run out.')
   },
   {
     id: 'ghproxy-com',
@@ -3017,7 +3017,7 @@ const CH_PUBLIC = [
     api: 'https://gh-proxy.com/' + API_HOST,
     raw: 'https://gh-proxy.com/' + RAW_HOST,
     trust: false,
-    note: '公共中转，旧域名，作备用'
+    note: T('公共中转，旧域名，作备用', 'Public relay, legacy domain, kept as fallback.')
   }
 ];
 
@@ -3027,10 +3027,10 @@ function chCustom() {
   if (!tpl) return null;
   return {
     id: 'custom',
-    label: '自建',
+    label: T('自建', 'Self-hosted'),
     tpl,
     trust: true,
-    note: '自建中转，凭据经过你自己的服务器'
+    note: T('自建中转，凭据经过你自己的服务器', 'Self-hosted proxy; credentials go through your own server.')
   };
 }
 
@@ -3587,8 +3587,8 @@ function mirrorLabel(url) {
   if (url.includes('gh-proxy.org')) return 'gh-proxy.org';
   if (url.includes('gh-proxy.com')) return 'gh-proxy.com';
   if (url.includes('ghfast.top')) return 'ghfast.top';
-  if (url.includes('raw.githubusercontent.com')) return '直连 raw';
-  if (url.includes('workers.dev') || url.includes('{url}')) return '自建中转';
+  if (url.includes('raw.githubusercontent.com')) return T('直连 raw', 'Direct raw');
+  if (url.includes('workers.dev') || url.includes('{url}')) return T('自建中转', 'Self-hosted');
   return '中转';
 }
 
@@ -3803,7 +3803,7 @@ async function applyUpdate() {
   }
   if (window.Android) {
     // 旧安装包没有 updatePage；WebView 里 <a download> 不会落盘，改用手动下载安装包
-    toast('当前安装包不含页面更新接口，请先下载安装包', 6000);
+    toast(T('当前安装包不含页面更新接口，请先下载安装包', 'This APK build lacks the page-update bridge; download the APK first'), 6000);
     if (btn) { btn.disabled = false; btn.textContent = label; }
     openApkDownloadDialog();
     return;
@@ -3864,8 +3864,8 @@ function apkDownloadChannels(apkName, releaseTag) {
     { label: 'ghfast.top', url: 'https://ghfast.top/' + rel },
     { label: 'gh-proxy.org', url: 'https://gh-proxy.org/' + rel },
     { label: 'ghproxy.net', url: 'https://ghproxy.net/' + rel },
-    { label: 'GitHub 发行版（直链）', url: rel },
-    { label: '直连 raw', url: raw }
+    { label: T('GitHub 发行版（直链）', 'GitHub Releases (direct)'), url: rel },
+    { label: T('直连 raw', 'Direct raw'), url: raw }
   ];
 }
 
@@ -3897,9 +3897,8 @@ async function openApkDownloadDialog() {
     <div class="modal-card">
       <h3>下载安装包 ${esc(meta.versionName)}</h3>
       <p class="hint">${upToDate
-        ? '当前安装包 ' + esc(sv) + '，已是最新。仍可重新下载。'
-        : '当前安装包 ' + (esc(sv) || '未知') + '，可升级到 ' + esc(meta.versionName) +
-          '。选一个通道，用系统浏览器下载后安装（覆盖安装，无需卸载）。'}</p>
+        ? T('当前安装包 ' + esc(sv) + '，已是最新。仍可重新下载。', 'Current APK ' + esc(sv) + ' is up to date. You can still re-download.')
+        : T('当前安装包 ' + (esc(sv) || '未知') + '，可升级到 ' + esc(meta.versionName) + '。选一个通道，用系统浏览器下载后安装（覆盖安装，无需卸载）。', 'Current APK ' + (esc(sv) || 'unknown') + ' can upgrade to ' + esc(meta.versionName) + '. Pick a channel, download in the system browser and install (overwrite install, no uninstall needed).')}</p>
       <div class="apk-chans">
         ${chans.map((c, i) => `<button class="btn sm" data-ch="${i}">${esc(c.label)}</button>`).join('')}
       </div>
@@ -6235,8 +6234,8 @@ async function downloadOne(o, r, ref, path, name) {
   // 旧版安装包没有文件保存接口：安卓 WebView 里 <a download> 是空操作，会静默丢文件
   if (window.Android && typeof window.Android.downloadFile !== 'function') {
     showDlPanel('无法保存文件');
-    updateDlPanel('当前安装包缺少文件保存接口，文件只在内存里下载，不会落盘。请先在设置中更新安装包（1.0.8 起支持）。', 0, null, null);
-    toast('当前安装包版本过旧，文件不会保存，请先更新安装包', 6000);
+    updateDlPanel(T('当前安装包缺少文件保存接口，文件只在内存里下载，不会落盘。请先在设置中更新安装包（1.0.8 起支持）。', 'This APK build lacks the file-save bridge; the download stays in memory and will be lost. Update the APK first (supported since 1.0.8).'), 0, null, null);
+    toast(T('当前安装包版本过旧，文件不会保存，请先更新安装包', 'APK too old: the file will not be saved. Update the APK first'), 6000);
     setTimeout(hideDlPanel, 7000);
     return;
   }
@@ -6289,16 +6288,16 @@ function renderDlWhere() {
     if (A && typeof A.downloadDir === 'function') {
       let dir = '';
       try { dir = A.downloadDir() || ''; } catch (_) {}
-      hint.innerHTML = '文件保存在系统下载目录：<code>' + esc(dir || '内部存储/Download') +
-        '</code>。文件名与原文件一致，重名时系统会自动加后缀。';
+      hint.innerHTML = T('文件保存在系统下载目录：<code>', 'Files are saved to the system download folder: <code>') + esc(dir || T('内部存储/Download', 'Internal storage/Download')) +
+        '</code>' + T('。文件名与原文件一致，重名时系统会自动加后缀。', '. Filenames match the original; duplicates get a suffix automatically.');
     } else {
-      hint.innerHTML = '网页版由浏览器保存到默认下载目录：Chrome/Edge 一般在“下载”列表，Windows 默认在“下载”文件夹。';
+      hint.innerHTML = T('网页版由浏览器保存到默认下载目录：Chrome/Edge 一般在「下载」列表，Windows 默认在「下载」文件夹。', 'On the web the browser saves to its default download folder: Chrome/Edge show it under Downloads; on Windows it is the Downloads folder.');
     }
   }
   const openDir = $('#dlOpenDir');
   if (openDir) openDir.onclick = () => {
     if (A && typeof A.openDownloadsFolder === 'function') A.openDownloadsFolder();
-    else toast('网页版请到浏览器的下载列表查看');
+    else toast(T('网页版请到浏览器的下载列表查看', 'On the web, check your browser Downloads list'));
   };
   const refresh = $('#dlRefresh');
   if (refresh) refresh.onclick = renderDlList;
@@ -6313,18 +6312,18 @@ function renderDlList() {
   let arr = [];
   try { arr = JSON.parse(A.listDownloads() || '[]'); } catch (_) {}
   if (!arr || !arr.length) {
-    list.innerHTML = '<div class="dim" style="font-size:12px;margin-top:8px">还没有下载记录</div>';
+    list.innerHTML = '<div class="dim" style="font-size:12px;margin-top:8px">' + T('还没有下载记录', 'No downloads yet') + '</div>';
     return;
   }
   list.innerHTML = arr.map(it => {
     const t = Number(it.time) ? new Date(Number(it.time)).toLocaleString('zh-CN') : '';
-    const st = it.failed ? '失败' : (it.done ? '已完成' : '下载中');
+    const st = it.failed ? T('失败', 'Failed') : (it.done ? T('已完成', 'Done') : T('下载中', 'Downloading'));
     return `<div class="dl-row">
       <div class="dl-row-main">
         <b>${esc(it.name || '')}</b>
         <span class="dim mono">${esc(t)}${t ? ' · ' : ''}${st}</span>
       </div>
-      <button class="btn sm ghost" data-open="${Number(it.id) || 0}">打开</button>
+      <button class="btn sm ghost" data-open="${Number(it.id) || 0}">${T('打开', 'Open')}</button>
     </div>`;
   }).join('');
   list.querySelectorAll('[data-open]').forEach(b => {
@@ -6573,11 +6572,11 @@ async function viewReleases(o, r) {
             ${rel.draft ? '<span class="badge draft">草稿</span>' : ''}
             <span class="spacer"></span>
             <span class="dim">${fmtDate(rel.published_at)}</span>
-            <a class="btn sm ghost" href="${link(o, r, 'tree', rel.tag_name, '')}">浏览代码</a>
+            <a class="btn sm ghost" href="${link(o, r, 'tree', rel.tag_name, '')}">${T('浏览代码', 'View code')}</a>
             <button type="button" class="btn sm primary rel-zip"
               data-url="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(rel.tag_name)}"
               data-name="${esc(o + '-' + r + '-' + rel.tag_name + '.zip')}">${ICON.download} ZIP</button>
-            ${canWrite() ? `<button type="button" class="btn sm ghost rel-del" data-id="${rel.id}" data-name="${esc(rel.name || rel.tag_name)}">删除</button>` : ''}
+            ${canWrite() ? `<button type="button" class="btn sm ghost rel-del" data-id="${rel.id}" data-name="${esc(rel.name || rel.tag_name)}">${T('删除', 'Delete')}</button>` : ''}
           </div>
           ${rel.body ? `<div class="rel-body markdown-body" data-rel="${rel.id}">${renderMarkdown(rel.body, ctx).innerHTML}</div>` : ''}
           ${(rel.assets || []).length ? `<div class="rel-assets">
@@ -7324,7 +7323,7 @@ async function viewTools(o, r, ref) {
     const st = channelStatus[ch.id];
     const dot = !st ? 'var(--fg-subtle)' : (st.quota > 0 ? 'var(--green)' : 'var(--yellow)');
     const tail = !st ? '不可用'
-      : st.ms + ' ms · ' + (st.quota > 0 ? '余 ' + st.quota : '额度已耗尽');
+      : st.ms + ' ms · ' + (st.quota > 0 ? T('余 ', 'left ') + st.quota : T('额度已耗尽', 'quota exhausted'));
     return `<div class="ch-row">
       <span class="ch-dot" style="background:${dot}"></span>
       <b>${esc(ch.label)}</b>
@@ -7335,77 +7334,77 @@ async function viewTools(o, r, ref) {
   }).join('');
 
   app.innerHTML = `
-  <h2 class="page-title">通路与下载</h2>
-  <p class="lead">同一个请求有多条通路可选，客户端会挑当前能用的那条，并记住结果。</p>
+  <h2 class="page-title">${T('通路与下载', 'Routes & Downloads')}</h2>
+  <p class="lead">Every request has several routes; the client picks one that currently works and remembers the result.</p>
 
   <div class="tool-card">
-    <h3>通道路由</h3>
-    <p class="hint">按「直连 → 自建中转 → 公共中转」的优先级探测，任一失败自动换下一条。</p>
+    <h3>${T('通道路由', 'Route probing')}</h3>
+    <p class="hint">Probed in the order direct → self-hosted → public relay; on failure the next one takes over automatically.</p>
     ${chRows}
     <div class="copy-row" style="margin-top:10px">
-      <button class="btn" id="reprobe">重新探测</button>
-      <button class="btn" id="gotoSettings">配置自建中转</button>
+      <button class="btn" id="reprobe">${T('重新探测', 'Re-probe')}</button>
+      <button class="btn" id="gotoSettings">${T('配置自建中转', 'Configure proxy')}</button>
     </div>
   </div>
 
   <div class="tool-card">
-    <h3>归档包</h3>
-    <p class="hint">官方 codeload 通道通常最快；不通时可走中转前缀。</p>
+    <h3>${T('归档包', 'Archives')}</h3>
+    <p class="hint">The official codeload route is usually fastest; if unreachable, use a relay prefix.</p>
     ${row('ZIP', has ? `https://codeload.github.com/${o}/${r}/zip/${f}` : 'https://codeload.github.com/OWNER/REPO/zip/HEAD',
-      has ? `<a class="btn primary" href="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(f)}">下载</a>` : '')}
+      has ? `<a class="btn primary" href="https://codeload.github.com/${o}/${r}/zip/${encodeURIComponent(f)}">${T('下载', 'Download')}</a>` : '')}
     ${row('ZIP 中转', `https://gh-proxy.org/https://github.com/${has ? o + '/' + r : 'OWNER/REPO'}/archive/refs/heads/${f}.zip`)}
     ${row('TAR.GZ', has ? `https://codeload.github.com/${o}/${r}/tar.gz/${f}` : 'https://codeload.github.com/OWNER/REPO/tar.gz/HEAD')}
   </div>
 
   <div class="tool-card">
     <h3>git clone</h3>
-    <p class="hint">GitHub 的 git 端点在部分网络下不可达，可加前缀。国内网络建议第一条。</p>
+    <p class="hint">The git endpoint is unreachable on some networks; a prefix helps. On mainland networks prefer the first.</p>
     ${row('中转 1', `git clone https://gh-proxy.org/${repoUrl}.git`)}
     ${row('中转 2', `git clone https://ghfast.top/${repoUrl}.git`)}
     ${row('原地址', `git clone ${repoUrl}.git`)}
   </div>
 
   <div class="tool-card">
-    <h3>下载指定文件</h3>
-    <p class="hint">粘贴文件链接（github.com 的 blob 页或 raw 链接），或手动填下方字段，客户端会并行探测并挑最快通道下载到本机。</p>
+    <h3>${T('下载指定文件', 'Download a specific file')}</h3>
+    <p class="hint">Paste a file link (a github.com blob page or a raw link) or fill the fields below; the client probes routes in parallel and downloads via the fastest.</p>
     <div class="dl-form">
-      <input id="dlUrl" type="text" placeholder="粘贴文件链接，或 owner/repo@ref/path" spellcheck="false">
-      <button class="btn" id="dlParse">解析</button>
+      <input id="dlUrl" type="text" placeholder="${T('粘贴文件链接，或 owner/repo@ref/path', 'Paste a file link, or owner/repo@ref/path')}" spellcheck="false">
+      <button class="btn" id="dlParse">${T('解析', 'Parse')}</button>
     </div>
     <div class="dl-form">
       <input id="dlOwn" type="text" placeholder="owner/repo" spellcheck="false" value="${has ? esc(o + '/' + r) : ''}">
-      <input id="dlRef" type="text" placeholder="分支/标签（默认 main）" spellcheck="false" value="${has ? esc(f) : ''}">
-      <input id="dlPath" type="text" placeholder="文件路径，如 src/app.js" spellcheck="false">
+      <input id="dlRef" type="text" placeholder="${T('分支/标签（默认 main）', 'branch/tag (default main)')}" spellcheck="false" value="${has ? esc(f) : ''}">
+      <input id="dlPath" type="text" placeholder="${T('文件路径，如 src/app.js', 'File path, e.g. src/app.js')}" spellcheck="false">
     </div>
     <div class="dl-form">
-      <input id="dlName" type="text" placeholder="保存文件名（留空取路径末段）" spellcheck="false">
-      <button class="btn primary" id="dlGo">下载文件</button>
+      <input id="dlName" type="text" placeholder="${T('保存文件名（留空取路径末段）', 'Save as (empty = last path segment)')}" spellcheck="false">
+      <button class="btn primary" id="dlGo">${T('下载文件', 'Download file')}</button>
     </div>
     <div id="dlTip" class="dim" style="font-size:12px;margin-top:6px"></div>
-    ${row('直连', rawBase)}
+    ${row(T('直连', 'Direct'), rawBase)}
   </div>
 
   <div class="tool-card">
-    <h3>下载位置</h3>
-    <p class="hint" id="dlWhereHint" style="margin-bottom:8px">正在读取…</p>
+    <h3>${T('下载位置', 'Download location')}</h3>
+    <p class="hint" id="dlWhereHint" style="margin-bottom:8px">Loading…</p>
     <div class="modal-actions" style="margin-top:0">
-      <button class="btn sm" id="dlOpenDir">打开下载目录</button>
-      <button class="btn sm ghost" id="dlRefresh">刷新记录</button>
+      <button class="btn sm" id="dlOpenDir">${T('打开下载目录', 'Open folder')}</button>
+      <button class="btn sm ghost" id="dlRefresh">${T('刷新记录', 'Refresh list')}</button>
     </div>
     <div id="dlList" class="dl-list"></div>
   </div>
 
   <div class="tool-card">
-    <h3>Release 附件</h3>
-    <p class="hint">发行版资源走 objects.githubusercontent.com，多数网络可直接下载；若失败，把链接前面加上中转前缀即可。</p>
+    <h3>Release assets</h3>
+    <p class="hint">Release assets are served from objects.githubusercontent.com and download directly on most networks; on failure, prefix the link with a relay.</p>
   </div>
 
   <div class="tool-card plain">
-    <h3>为什么需要这些</h3>
+    <h3>${T('为什么需要这些', 'Why these exist')}</h3>
     <p class="hint" style="margin:0">
-      页面只读取 <code>api.github.com</code> 的公开数据，不抓取网页，因此不受页面改版影响，也不用密钥之外的任何权限。
-      归档下载走 <code>codeload.github.com</code>，图片与原始文件走 raw 或中转。
-      所有通路都在浏览器里直接连接，没有经过本站的服务器——这个页面本身只是一堆静态文件。
+      The page only reads public data from <code>api.github.com</code> and never scrapes web pages, so site redesigns do not affect it and no extra scopes are needed.
+      Archives come from <code>codeload.github.com</code>; images and raw files go through raw or a relay.
+      All routes connect directly from the browser - there is no server behind this page, it is just a static file.
     </p>
   </div>`;
 
@@ -7576,7 +7575,7 @@ async function openSettings(section) {
   const chRows = allChannels().map(ch => {
     const st = channelStatus[ch.id];
     const dot = !st ? 'var(--fg-subtle)' : (st.quota > 0 ? 'var(--green)' : 'var(--yellow)');
-    const tail = !st ? '未连通' : st.ms + ' ms · ' + (st.quota > 0 ? '余 ' + st.quota : '无额度');
+    const tail = !st ? T('未连通', 'unreachable') : st.ms + ' ms · ' + (st.quota > 0 ? T('余 ', 'left ') + st.quota : T('无额度', 'no quota'));
     return `<div class="ch-row">
       <span class="ch-dot" style="background:${dot}"></span>
       <b>${esc(ch.label)}</b>
@@ -7965,7 +7964,7 @@ async function openSettings(section) {
     try { if (window.Android && window.Android.shellVersion) sv = window.Android.shellVersion() || ''; } catch (_) {}
     if (sv && cmpVer(sv, APP_VERSION) < 0) {
       shellHint.style.display = '';
-      shellHint.innerHTML = '当前安装包 ' + esc(sv) + '，页面 ' + esc(APP_VERSION) +
+      shellHint.innerHTML = T('当前安装包 ', 'Current APK ') + esc(sv) + T('，页面 ', ', page ') + esc(APP_VERSION) +
         '。页面热更不会替换安装包，点下方「检查更新」查看两者状态。';
     }
   }
@@ -8397,7 +8396,7 @@ function repoActions(o, r, repo) {
     (isFork ? '<span class="dim" style="font-size:12px">fork 来的仓库</span>'
             : '<button type="button" class="btn sm" id="actFork">Fork</button>') +
     '<button type="button" class="btn sm" id="actUpload">上传文件</button>' +
-    (isAdmin ? '<button type="button" class="btn sm danger" id="actDel">删除仓库</button>' : '') +
+    (isAdmin ? '<button type="button" class="btn sm danger" id="actDel">' + T('删除仓库', 'Delete repository') + '</button>' : '') +
     '</div>';
 }
 
@@ -8436,7 +8435,7 @@ function openDeleteRepoDialog(o, r) {
 
   mask.innerHTML =
     '<div class="dialog">' +
-      '<h3>删除仓库</h3>' +
+      '<h3>' + T('删除仓库', 'Delete repository') + '</h3>' +
       '<p class="hint" style="color:var(--red)">此操作不可撤销。仓库、Issue、PR、星标与 fork 关系都会被移除。</p>' +
       '<p class="hint">需要令牌带 <code>delete_repo</code> 作用域，仅有 <code>repo</code> 不足以删除。</p>' +
       '<p class="hint">请输入 <code>' + esc(full) + '</code> 以确认：</p>' +
@@ -8445,7 +8444,7 @@ function openDeleteRepoDialog(o, r) {
         '<span class="dim" id="drMsg" style="font-size:12px"></span>' +
         '<span class="spacer"></span>' +
         '<button type="button" class="btn" id="drCancel">取消</button>' +
-        '<button type="button" class="btn danger" id="drGo">永久删除</button>' +
+        '<button type="button" class="btn danger" id="drGo">' + T('永久删除', 'Delete permanently') + '</button>' +
       '</div>' +
     '</div>';
 
@@ -8929,7 +8928,7 @@ async function viewGist(id) {
     srcLink('https://gist.github.com/' + (owner || '') + '/' + esc(id)) +
     files.map((n) => gistFileHtml(n, g.files[n])).join('') +
     (canWrite() && owner === (meCache ? meCache.login : owner)
-      ? '<div class="repo-actions"><button type="button" class="btn sm ghost" id="delGist">删除此 Gist</button></div>'
+      ? '<div class="repo-actions"><button type="button" class="btn sm ghost" id="delGist">' + T('删除此 Gist', 'Delete this Gist') + '</button></div>'
       : '');
 
   const del = $('#delGist');
@@ -9190,7 +9189,7 @@ function histItemHtml(it, editable) {
     (editable
       ? '<span class="hist-act">' +
         '<button type="button" class="btn sm ghost" data-hedit="' + esc(it.id) + '">编辑</button>' +
-        '<button type="button" class="btn sm ghost" data-hdel="' + esc(it.id) + '">删除</button>' +
+        '<button type="button" class="btn sm ghost" data-hdel="' + esc(it.id) + '">' + T('删除', 'Delete') + '</button>' +
         '</span>'
       : '') +
     '</div>';
@@ -9549,6 +9548,14 @@ document.addEventListener('DOMContentLoaded', () => {
   if (navMe) navMe.textContent = T('我的', 'Me');
   const qBtn = $('#q');
   if (qBtn) qBtn.setAttribute('title', T('搜索', 'Search'));
+  const rateEl = document.getElementById('rate');
+  if (rateEl) rateEl.setAttribute('title', T('API 剩余额度 / API quota', 'API quota remaining'));
+  const chEl = document.getElementById('ch');
+  if (chEl) chEl.setAttribute('title', T('当前通道', 'Current route'));
+  const bell = document.getElementById('bell');
+  if (bell) bell.setAttribute('aria-label', T('通知', 'Notifications'));
+  const stText = document.querySelector('.st-text');
+  if (stText && stText.dataset.en) stText.textContent = T(stText.dataset.zh, stText.dataset.en);
 
   setupSearch();
   setupTheme();
